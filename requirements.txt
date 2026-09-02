@@ -1,0 +1,8 @@
+streamlit
+pyrofork
+tgcrypto
+opencv-python-headless
+numpy
+Pillow
+curl_cffi
+beautifulsoup4
