@@ -14,6 +14,7 @@ import intro
 import thumbnail
 import scrapping
 import tts
+import script
 
 # ==========================================
 # 1. STREAMLIT UI & TELEMETRY
@@ -75,6 +76,8 @@ async def run_bot():
                 "**Available Commands:**\n"
                 "• `/scrapeakg` — Today's 22K rate from AKGSMA (1g & 1 pavan)\n"
                 "• `/scrapegd` — GoodReturns 22K rate & 8-day history\n"
+                "• `/scriptakg` — Generate Malayalam Script (AKGSMA + GoodReturns history)\n"
+                "• `/scriptgd` — Generate Malayalam Script (GoodReturns only)\n"
                 "• `/genthumb` — Generate high-contrast thumbnails\n"
                 "• `/tts <text>` — Generate Malayalam Voiceover\n"
                 "• `/generate` — Render and upload intro video"
@@ -94,24 +97,51 @@ async def run_bot():
             GLOBAL_STATE.set_status("TTS", "Generating audio via Gemini/Cartesia...")
             
             try:
-                # Execute TTS generation (This function is already async in tts.py)
                 audio_path = await tts.generate_speech(user_text)
                 
                 if audio_path and os.path.exists(audio_path):
                     await client.send_audio(
                         chat_id=message.chat.id,
                         audio=audio_path,
-                        caption=f"🎙️ **Generated Audio:**\n`{user_text}`\n\n*(This file is now saved in the Audios/ folder and will be randomly selected during the next /generate run)*"
+                        caption=f"🎙️ **Generated Audio:**\n`{user_text}`\n\n*(Saved to Audios/ folder)*"
                     )
                     await status_msg.delete()
                     GLOBAL_STATE.set_status("Idle", "Audio generated successfully.")
-                    GLOBAL_STATE.log("Voiceover generated and uploaded to Telegram.")
                 else:
                     await status_msg.edit_text("❌ **Failed to generate audio. All engines exhausted.**")
                     GLOBAL_STATE.set_status("Error", "TTS generation failed.")
             except Exception as e:
                 GLOBAL_STATE.log(f"TTS Error: {e}")
                 await status_msg.edit_text(f"❌ **Error generating TTS:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
+
+        # ----------------------------------------------------
+        # SCRIPT GENERATOR COMMANDS
+        # ----------------------------------------------------
+        @app.on_message(filters.command("scriptakg") & filters.private)
+        async def handle_scriptakg(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Generating Malayalam Script (AKGSMA)...**")
+            GLOBAL_STATE.set_status("Scripting", "Generating script via AKGSMA...")
+            try:
+                script_text = await asyncio.to_thread(script.get_script_akg)
+                await status_msg.edit_text(f"📜 **Generated Script (AKGSMA):**\n\n`{script_text}`")
+                GLOBAL_STATE.set_status("Idle", "Script generated.")
+            except Exception as e:
+                GLOBAL_STATE.log(f"Script Error: {e}")
+                await status_msg.edit_text(f"❌ **Error generating script:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
+
+        @app.on_message(filters.command("scriptgd") & filters.private)
+        async def handle_scriptgd(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Generating Malayalam Script (GoodReturns)...**")
+            GLOBAL_STATE.set_status("Scripting", "Generating script via GoodReturns...")
+            try:
+                script_text = await asyncio.to_thread(script.get_script_gd)
+                await status_msg.edit_text(f"📜 **Generated Script (GoodReturns):**\n\n`{script_text}`")
+                GLOBAL_STATE.set_status("Idle", "Script generated.")
+            except Exception as e:
+                GLOBAL_STATE.log(f"Script Error: {e}")
+                await status_msg.edit_text(f"❌ **Error generating script:** {e}")
                 GLOBAL_STATE.set_status("Error", str(e))
 
         # ----------------------------------------------------
@@ -126,7 +156,6 @@ async def run_bot():
                 report = await asyncio.to_thread(scrapping.get_akgsma_report)
                 await status_msg.edit_text(report)
                 GLOBAL_STATE.set_status("Idle", "AKGSMA data retrieved successfully.")
-                GLOBAL_STATE.log(f"Sent AKGSMA report to user {message.from_user.id}")
             except Exception as e:
                 GLOBAL_STATE.log(f"AKGSMA Scrape Error: {e}")
                 await status_msg.edit_text(f"❌ **Error fetching AKGSMA:** {e}")
@@ -144,7 +173,6 @@ async def run_bot():
                 report = await asyncio.to_thread(scrapping.get_goodreturns_report)
                 await status_msg.edit_text(report)
                 GLOBAL_STATE.set_status("Idle", "GoodReturns data retrieved successfully.")
-                GLOBAL_STATE.log(f"Sent GoodReturns report to user {message.from_user.id}")
             except Exception as e:
                 GLOBAL_STATE.log(f"GoodReturns Scrape Error: {e}")
                 await status_msg.edit_text(f"❌ **Error fetching GoodReturns:** {e}")
@@ -165,23 +193,13 @@ async def run_bot():
                 thumb2_path = os.path.join("Images", "thumbnail_2.png")
                 
                 if os.path.exists(thumb1_path):
-                    await client.send_photo(
-                        chat_id=message.chat.id,
-                        photo=thumb1_path,
-                        caption="🥇 **Thumbnail 1: ഇന്നത്തെ സ്വർണ്ണവില കേരളം**"
-                    )
+                    await client.send_photo(chat_id=message.chat.id, photo=thumb1_path, caption="🥇 **Thumbnail 1**")
                 
                 if os.path.exists(thumb2_path):
-                    await client.send_photo(
-                        chat_id=message.chat.id,
-                        photo=thumb2_path,
-                        caption="🥇 **Thumbnail 2: ഇന്നത്തെ രണ്ടാം സ്വർണ്ണവില കേരളം**"
-                    )
+                    await client.send_photo(chat_id=message.chat.id, photo=thumb2_path, caption="🥇 **Thumbnail 2**")
                 
                 await status_msg.delete()
                 GLOBAL_STATE.set_status("Idle", "Thumbnails generated successfully.")
-                GLOBAL_STATE.log("Thumbnails successfully uploaded to Telegram.")
-
             except Exception as e:
                 GLOBAL_STATE.log(f"Thumbnail Error: {e}")
                 await status_msg.edit_text(f"❌ **Error generating thumbnails:** {e}")
@@ -195,12 +213,10 @@ async def run_bot():
             status_msg = await message.reply_text("🔄 **Initializing Pipeline...**")
             
             try:
-                # Render Intro
                 GLOBAL_STATE.set_status("Rendering", "Generating Cinematic Intro...")
                 await status_msg.edit_text("🎬 **Rendering 3D Intro Video...** (This takes a moment)")
                 await asyncio.to_thread(intro.main)
 
-                # Concatenate with FFmpeg
                 GLOBAL_STATE.set_status("Merging", "Stitching video chunks via FFmpeg...")
                 await status_msg.edit_text("🗜️ **Stitching final video...**")
                 
@@ -216,7 +232,6 @@ async def run_bot():
                 ]
                 subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                # Upload to Telegram
                 GLOBAL_STATE.set_status("Uploading", "Sending final video to Telegram...")
                 await status_msg.edit_text("⬆️ **Uploading final video to chat...**")
                 
@@ -228,8 +243,6 @@ async def run_bot():
                 
                 await status_msg.delete()
                 GLOBAL_STATE.set_status("Idle", "Render complete. Waiting for next run.")
-                GLOBAL_STATE.log("Video successfully uploaded to Telegram.")
-
             except Exception as e:
                 GLOBAL_STATE.log(f"Pipeline Error: {e}")
                 await status_msg.edit_text(f"❌ **Error during generation:** {e}")
@@ -238,7 +251,6 @@ async def run_bot():
         await app.start()
         GLOBAL_STATE.log("Bot authenticated and listening for commands.")
         
-        # Keep background thread alive without touching OS signals
         await asyncio.Event().wait()
 
     except Exception as e:
@@ -246,7 +258,6 @@ async def run_bot():
     finally:
         if 'app' in locals() and app.is_initialized:
             await app.stop()
-
 
 # ==========================================
 # 3. STREAMLIT BOOTSTRAPPER
@@ -264,4 +275,3 @@ def start_background_bot():
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_background_bot()
-
