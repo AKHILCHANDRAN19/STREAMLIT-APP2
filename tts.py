@@ -16,26 +16,18 @@ except ImportError:
     st = None
     genai = None
 
-# ==========================================
-# ⚙️ CONFIGURATION & VOICE SETUP
-# ==========================================
-# Vijay voice profile locked (Latha removed)
 VIJAY_VOICE = {
     "name": "Vijay",
     "role": "Storytelling",
     "id": "374b80da-e622-4dfc-90f6-1eeb13d331c9",
-    "gemini_voice": "Puck"  # High-energy male voice equivalent
+    "gemini_voice": "Puck"
 }
 
-# Global index tracker for round-robin rotation
 CURRENT_KEY_INDEX = 0
-
+CACHED_CARTESIA_TOKEN = None
+TOKEN_EXPIRY = 0
 
 def get_gemini_api_keys():
-    """
-    Extracts multiple Gemini API keys from Streamlit secrets or environment variables.
-    Supports either comma-separated strings or TOML lists.
-    """
     keys = []
     if st and hasattr(st, "secrets"):
         if "GEMINI_API_KEYS" in st.secrets:
@@ -53,9 +45,7 @@ def get_gemini_api_keys():
 
     return keys
 
-
 def get_next_gemini_key(keys):
-    """Cycles through the available API keys for each text request."""
     global CURRENT_KEY_INDEX
     if not keys:
         return None
@@ -63,16 +53,13 @@ def get_next_gemini_key(keys):
     CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(keys)
     return selected_key
 
-
 def get_output_dir():
-    """Routes output to local repo Audios folder or mobile storage if present."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     audios_dir = os.path.join(base_dir, "Audios")
     if os.path.exists("/storage/emulated/0/Download"):
         return "/storage/emulated/0/Download"
     os.makedirs(audios_dir, exist_ok=True)
     return audios_dir
-
 
 def save_gemini_wave(filename, pcm_data, channels=1, rate=24000, sample_width=2):
     with wave.open(filename, "wb") as wf:
@@ -81,14 +68,8 @@ def save_gemini_wave(filename, pcm_data, channels=1, rate=24000, sample_width=2)
         wf.setframerate(rate)
         wf.writeframes(pcm_data)
 
-
-# ==========================================
-# 🟡 1. GEMINI PRIMARY TTS (ROTATING KEYS)
-# ==========================================
 async def generate_audio_gemini(text, api_key, output_filename=None):
     masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "VALID_KEY"
-    print(f"\n🚀 Sending text to Gemini API using Key [{masked_key}]...")
-
     try:
         client = genai.Client(api_key=api_key)
         res = client.models.generate_content(
@@ -105,25 +86,22 @@ async def generate_audio_gemini(text, api_key, output_filename=None):
                 )
             )
         )
-
         audio_data = res.candidates[0].content.parts[0].inline_data.data
         out_dir = get_output_dir()
         file_path = output_filename or os.path.join(out_dir, f"vijay_gemini_{int(time.time())}.wav")
-
         save_gemini_wave(file_path, audio_data)
-        print(f"✅ Gemini TTS complete for Vijay voice!")
-        print(f"💾 Saved as: {file_path}")
         return file_path
-
     except Exception as e:
         print(f"❌ Gemini TTS failed on key [{masked_key}]: {e}")
         return None
 
-
-# ==========================================
-# ⚪ 2. CARTESIA FALLBACK (VIJAY ONLY)
-# ==========================================
 def get_cartesia_public_token():
+    global CACHED_CARTESIA_TOKEN, TOKEN_EXPIRY
+    now = time.time()
+    # Reuse cached token for 15 minutes instead of re-fetching per chunk
+    if CACHED_CARTESIA_TOKEN and now < TOKEN_EXPIRY:
+        return CACHED_CARTESIA_TOKEN
+
     url = "https://backend.cartesia.ai/access-token/public"
     headers = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
@@ -133,15 +111,17 @@ def get_cartesia_public_token():
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
         data = res.json()
-        return data.get("token", data.get("access_token"))
+        token = data.get("token", data.get("access_token"))
+        if token:
+            CACHED_CARTESIA_TOKEN = token
+            TOKEN_EXPIRY = now + 900  # Cache for 15 minutes
+        return token
     except Exception as e:
         print(f"❌ Failed to obtain Cartesia token: {e}")
         return None
 
-
 async def generate_audio_cartesia(text, token, output_filename=None):
     ws_url = f"wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10&api_key={token}"
-
     payload = {
         "context_id": str(uuid.uuid4()),
         "model_id": "sonic-3",
@@ -160,48 +140,29 @@ async def generate_audio_cartesia(text, token, output_filename=None):
 
     try:
         async with websockets.connect(ws_url) as ws:
-            print(f"\n🚀 Sending text to Cartesia WebSocket (Vijay Voice)...")
             await ws.send(json.dumps(payload))
-
             audio_buffer = bytearray()
             while True:
                 response = json.loads(await ws.recv())
-
                 if response.get("type") == "chunk":
                     audio_buffer.extend(base64.b64decode(response["data"]))
-                    print("📦 Streaming audio chunks...", end="\r")
-
                 elif response.get("type") == "done":
                     out_dir = get_output_dir()
                     file_path = output_filename or os.path.join(out_dir, f"vijay_cartesia_{int(time.time())}.wav")
-
                     with wave.open(file_path, "wb") as wav_file:
                         wav_file.setnchannels(1)
                         wav_file.setsampwidth(2)
                         wav_file.setframerate(44100)
                         wav_file.writeframes(audio_buffer)
-
-                    print(f"\n✅ Cartesia TTS complete for Vijay voice!")
-                    print(f"💾 Saved as: {file_path}")
                     return file_path
-
                 elif response.get("type") == "error":
-                    print(f"\n❌ Cartesia Server Error: {response.get('error')}")
+                    print(f"\n❌ Cartesia Error: {response.get('error')}")
                     return None
-
     except Exception as e:
         print(f"\n❌ Cartesia Connection Error: {e}")
         return None
 
-
-# ==========================================
-# 🚀 MAIN TTS DISPATCHER
-# ==========================================
 async def generate_speech(text, output_filename=None):
-    """
-    Main entrypoint: Rotates Gemini keys per request.
-    Falls back to Cartesia (Vijay) if keys are missing or exhausted.
-    """
     gemini_keys = get_gemini_api_keys()
 
     if gemini_keys and genai:
@@ -209,28 +170,10 @@ async def generate_speech(text, output_filename=None):
         audio_path = await generate_audio_gemini(text, current_key, output_filename)
         if audio_path:
             return audio_path
-        print("⚠️ Primary Gemini call failed. Falling back to Cartesia...")
 
-    # Fallback Execution
-    print("🔄 Engaging Cartesia fallback engine...")
     token = get_cartesia_public_token()
     if token:
         return await generate_audio_cartesia(text, token, output_filename)
 
-    print("❌ All TTS providers failed.")
     return None
 
-
-async def main():
-    print("-" * 50)
-    user_text = input("📝 Enter Malayalam text:\n> ").strip()
-    print("-" * 50)
-
-    if not user_text:
-        user_text = "ഇന്നത്തെ സ്വർണ്ണവിപണി വിവരങ്ങളിലേക്ക് സ്വാഗതം."
-
-    await generate_speech(user_text)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
