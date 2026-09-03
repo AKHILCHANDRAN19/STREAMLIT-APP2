@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Modular project engines
 import intro
 import thumbnail
 import scrapping
@@ -57,26 +56,21 @@ with col2:
     log_area = st.empty()
     log_area.code("\n".join(GLOBAL_STATE.log_history) if GLOBAL_STATE.log_history else "System ready.", language="text")
 
-
 # ==========================================
-# 2. AUDIO & TEXT PROCESSING UTILITIES
+# 2. AUDIO & TEXT UTILITIES
 # ==========================================
 IST_TIMEZONE = timezone(timedelta(hours=5, minutes=30))
 
 def get_audio_duration_seconds(wav_path: str) -> float:
-    """Returns the precise duration of a WAV file in seconds."""
     if not os.path.exists(wav_path):
         return 0.0
     try:
         with wave.open(wav_path, "rb") as wf:
-            frames = wf.getnframes()
-            rate = wf.getframerate()
-            return frames / float(rate)
+            return wf.getnframes() / float(wf.getframerate())
     except Exception:
         return 0.0
 
-def combine_wav_files(input_paths, output_path, pause_duration=0.35):
-    """Losslessly stitches PCM WAV files in pure Python with an optional ambient pause."""
+def combine_wav_files(input_paths, output_path, pause_duration=0.3):
     data = []
     params = None
     for p in input_paths:
@@ -97,15 +91,10 @@ def combine_wav_files(input_paths, output_path, pause_duration=0.35):
                 out_wf.writeframes(chunk)
 
 def split_script_into_chunks(raw_text: str):
-    """
-    Splits the script into semantic voiceover chunks without stripping
-    words from the opening greeting or daily price announcements.
-    """
     parts = raw_text.split("━━━━━━━━━━━━━━━━━━━━━━━━━")
     
-    # 1. 7-Day Comparison (Part 1) -> 3 chunks
+    # Part 1: Comparison
     comp_raw = parts[1] if len(parts) > 1 else ""
-    # Cut off trailing section header (🥇 ...) without deleting words from greeting
     comp_clean = re.sub(r"🥇.*", "", comp_raw, flags=re.DOTALL)
     comp_clean = re.sub(r"[*_━#()|]", "", comp_clean).strip()
 
@@ -121,12 +110,9 @@ def split_script_into_chunks(raw_text: str):
             comp_chunks.append("കഴിഞ്ഞ ഒരാഴ്ചത്തെ " + rest.strip())
     else:
         sentences = [s.strip() for s in re.split(r"[.!?]", comp_clean) if len(s.strip()) > 5]
-        if len(sentences) >= 3:
-            comp_chunks = [sentences[0] + ".", ". ".join(sentences[1:-1]) + ".", sentences[-1] + "."]
-        else:
-            comp_chunks = [comp_clean]
+        comp_chunks = sentences[:3] if len(sentences) >= 3 else [comp_clean]
 
-    # 2. Today's Price (Part 2) -> 2 chunks
+    # Part 2: Today's Price
     price_raw = parts[2] if len(parts) > 2 else ""
     price_clean = re.sub(r"[*_━#()|]", "", price_raw).strip()
 
@@ -137,15 +123,11 @@ def split_script_into_chunks(raw_text: str):
         price_chunks.append("ഇതോടെ " + p2.strip())
     else:
         sentences = [s.strip() for s in re.split(r"[.!?]", price_clean) if len(s.strip()) > 5]
-        if len(sentences) >= 2:
-            price_chunks = [sentences[0] + ".", ". ".join(sentences[1:]) + "."]
-        else:
-            price_chunks = [price_clean]
+        price_chunks = sentences[:2] if len(sentences) >= 2 else [price_clean]
 
     return comp_chunks, price_chunks
 
 def clean_intro_audios_dir(audios_dir: str):
-    """Purges rogue TTS chunks from Audios/ so intro.py strictly picks from music tracks 1 to 8."""
     if not os.path.exists(audios_dir):
         return
     for fname in os.listdir(audios_dir):
@@ -154,7 +136,6 @@ def clean_intro_audios_dir(audios_dir: str):
                 os.remove(os.path.join(audios_dir, fname))
             except Exception:
                 pass
-
 
 # ==========================================
 # 3. PRODUCTION PIPELINE ORCHESTRATOR
@@ -166,105 +147,110 @@ async def execute_full_production(client: Client, message: Message, source: str)
 
     base_dir = os.getcwd()
     videos_dir = os.path.join(base_dir, "Videos")
-    intro_audios_dir = os.path.join(base_dir, "Audios")      # Retains only background music 1-8 for intro
-    tts_audios_dir = os.path.join(base_dir, "TTS_Audios")    # Dedicated folder for generated voiceovers
+    intro_audios_dir = os.path.join(base_dir, "Audios")
+    tts_audios_dir = os.path.join(base_dir, "TTS_Audios")
 
     os.makedirs(videos_dir, exist_ok=True)
     os.makedirs(intro_audios_dir, exist_ok=True)
     os.makedirs(tts_audios_dir, exist_ok=True)
 
-    # Prevent intro duration pollution
     clean_intro_audios_dir(intro_audios_dir)
 
     status_msg = await message.reply_text(f"🚀 **Starting {source.upper()} Auto-Production Pipeline...**")
 
     try:
-        # STEP 1: SCRIPT GENERATION & DISPATCH
+        # STEP 1: SCRIPT
         GLOBAL_STATE.set_status("Scripting", f"Generating {source} Malayalam script...")
         await status_msg.edit_text("📜 **1/6: Generating Malayalam Script...**")
         formatted_script = await asyncio.to_thread(script.get_script_akg if source == "akgsma" else script.get_script_gd)
         await message.reply_text(formatted_script)
         GLOBAL_STATE.log(f"Script sent for {source}.")
 
-        # STEP 2: DEDICATED TTS SYNTHESIS (Saved to TTS_Audios/)
-        GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers...")
-        await status_msg.edit_text("🎙️ **2/6: Synthesizing Voiceovers (Rotating API Keys)...**")
+        # STEP 2: CONCURRENT PARALLEL TTS SYNTHESIS
+        GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers in parallel...")
+        await status_msg.edit_text("🎙️ **2/6: Synthesizing Voiceovers Concurrently...**")
         comp_chunks, price_chunks = split_script_into_chunks(formatted_script)
         ts = int(now.timestamp())
 
-        # 7-Day Comparison Audio (3 Split API Calls)
-        comp_parts = []
-        for i, chunk in enumerate(comp_chunks):
-            p_out = os.path.join(tts_audios_dir, f"comp_p{i}_{ts}.wav")
-            f_path = await tts.generate_speech(chunk, output_filename=p_out)
-            if f_path and os.path.exists(f_path):
-                comp_parts.append(f_path)
-            await asyncio.sleep(0.8)
+        comp_tasks = [
+            tts.generate_speech(chunk, output_filename=os.path.join(tts_audios_dir, f"comp_p{i}_{ts}.wav"))
+            for i, chunk in enumerate(comp_chunks)
+        ]
+        price_tasks = [
+            tts.generate_speech(chunk, output_filename=os.path.join(tts_audios_dir, f"price_p{j}_{ts}.wav"))
+            for j, chunk in enumerate(price_chunks)
+        ]
+
+        comp_results, price_results = await asyncio.gather(
+            asyncio.gather(*comp_tasks),
+            asyncio.gather(*price_tasks)
+        )
+
+        comp_parts = [p for p in comp_results if p and os.path.exists(p)]
+        price_parts = [p for p in price_results if p and os.path.exists(p)]
 
         audio_comp = os.path.join(tts_audios_dir, f"comp_audio_{ts}.wav")
-        combine_wav_files(comp_parts, audio_comp, pause_duration=0.3)
+        combine_wav_files(comp_parts, audio_comp, pause_duration=0.25)
         dur_comp = get_audio_duration_seconds(audio_comp)
 
-        # Today's Price Audio (2 Split API Calls)
-        price_parts = []
-        for j, chunk in enumerate(price_chunks):
-            p_out = os.path.join(tts_audios_dir, f"price_p{j}_{ts}.wav")
-            f_path = await tts.generate_speech(chunk, output_filename=p_out)
-            if f_path and os.path.exists(f_path):
-                price_parts.append(f_path)
-            await asyncio.sleep(0.8)
-
         audio_price = os.path.join(tts_audios_dir, f"price_audio_{ts}.wav")
-        combine_wav_files(price_parts, audio_price, pause_duration=0.3)
+        combine_wav_files(price_parts, audio_price, pause_duration=0.25)
         dur_price = get_audio_duration_seconds(audio_price)
 
         await client.send_audio(chat_id=message.chat.id, audio=audio_comp, caption=f"🎙️ **7-Day Comparison Voiceover** ({dur_comp:.1f}s)")
         await client.send_audio(chat_id=message.chat.id, audio=audio_price, caption=f"🎙️ **Today's Rate Voiceover** ({dur_price:.1f}s)")
         GLOBAL_STATE.log(f"Voiceovers ready. Comp: {dur_comp:.1f}s | Price: {dur_price:.1f}s")
 
-        # STEP 3: 3D INTRO VIDEO (Full 11-12s Duration with Fast-Start Encoding)
+        # STEP 3: 3D INTRO VIDEO (Single-Pass, Direct Output)
         GLOBAL_STATE.set_status("Rendering", "Rendering 3D Intro Video...")
         await status_msg.edit_text("🎬 **3/6: Rendering 3D Intro Video...**")
         await asyncio.to_thread(intro.main)
 
-        raw_intro = os.path.join(videos_dir, "intro.mp4")
-        optimized_intro = os.path.join(videos_dir, f"intro_opt_{ts}.mp4")
+        intro_vid = os.path.join(videos_dir, "intro.mp4")
+        await client.send_video(chat_id=message.chat.id, video=intro_vid, caption="🎬 **Intro Segment**")
 
-        intro_cmd = [
-            "ffmpeg", "-y", "-i", raw_intro,
-            "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-movflags", "+faststart", optimized_intro
-        ]
-        await asyncio.to_thread(subprocess.run, intro_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment** (11-12s)")
-
-        # STEP 4: 7-DAY COMPARISON (Exact Audio Duration Animation)
+        # STEP 4: 7-DAY COMPARISON (Original Script + Native FFmpeg Extension)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 7-Day Chart ({dur_comp:.1f}s)...")
-        await status_msg.edit_text(f"📊 **4/6: Rendering 7-Day Comparison ({dur_comp:.1f}s animation)...**")
-        raw_comp = await asyncio.to_thread(sevendayComparison.generate_perfect_fast_animation, duration_sec=dur_comp)
+        await status_msg.edit_text("📊 **4/6: Processing 7-Day Comparison Chart...**")
+        raw_comp = await asyncio.to_thread(sevendayComparison.main)
 
         synced_comp = os.path.join(videos_dir, f"comp_synced_{ts}.mp4")
-        mux_comp_cmd = [
+        pad_dur_1 = max(0.5, dur_comp - 5.5 + 0.5)
+        fade_st_1 = max(0.1, dur_comp - 0.6)
+
+        comp_sync_cmd = [
             "ffmpeg", "-y", "-i", raw_comp, "-i", audio_comp,
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-shortest", "-movflags", "+faststart", synced_comp
+            "-filter_complex",
+            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop_duration={pad_dur_1},fade=t=out:st={fade_st_1}:d=0.6[v]",
+            "-map", "[v]", "-map", "1:a",
+            "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+            "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", str(dur_comp), "-movflags", "+faststart", synced_comp
         ]
-        await asyncio.to_thread(subprocess.run, mux_comp_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        await asyncio.to_thread(subprocess.run, comp_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_comp, caption=f"📈 **7-Day Price Comparison** ({dur_comp:.1f}s)")
 
-        # STEP 5: 22K PRICE CHART (Exact Audio Duration Animation)
+        # STEP 5: 22K PRICE CHART (Original Script + Native FFmpeg Extension)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 22K Price ({dur_price:.1f}s)...")
-        await status_msg.edit_text(f"💎 **5/6: Rendering Today's Rate ({dur_price:.1f}s animation)...**")
-        raw_price = await asyncio.to_thread(price_22k.main, source=source, duration_sec=dur_price)
+        await status_msg.edit_text("💎 **5/6: Processing Today's Rate Chart...**")
+        raw_price = await asyncio.to_thread(price_22k.main, source=source)
 
         synced_price = os.path.join(videos_dir, f"price_synced_{ts}.mp4")
-        mux_price_cmd = [
+        pad_dur_2 = max(0.5, dur_price - 7.0 + 0.5)
+        fade_st_2 = max(0.1, dur_price - 0.6)
+
+        price_sync_cmd = [
             "ffmpeg", "-y", "-i", raw_price, "-i", audio_price,
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-shortest", "-movflags", "+faststart", synced_price
+            "-filter_complex",
+            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop_duration={pad_dur_2},fade=t=out:st={fade_st_2}:d=0.6[v]",
+            "-map", "[v]", "-map", "1:a",
+            "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+            "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", str(dur_price), "-movflags", "+faststart", synced_price
         ]
-        await asyncio.to_thread(subprocess.run, mux_price_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        await asyncio.to_thread(subprocess.run, price_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_price, caption=f"💎 **Today's Rate Segment** ({dur_price:.1f}s)")
 
         # STEP 6: SINGLE-PASS MASTER MERGE
@@ -284,12 +270,13 @@ async def execute_full_production(client: Client, message: Message, source: str)
 
         master_cmd = [
             "ffmpeg", "-y",
-            "-i", optimized_intro,
+            "-i", intro_vid,
             "-i", synced_comp,
             "-i", synced_price,
             "-filter_complex", concat_filter,
             "-map", "[vfinal]", "-map", "[afinal]",
             "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+            "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "160k",
             "-movflags", "+faststart",
             final_video_path
@@ -313,7 +300,6 @@ async def execute_full_production(client: Client, message: Message, source: str)
         GLOBAL_STATE.log(f"Pipeline Crash: {e}")
         await status_msg.edit_text(f"❌ **Error:** `{e}`")
         GLOBAL_STATE.set_status("Error", str(e))
-
 
 # ==========================================
 # 4. PYROGRAM BOT ROUTING
@@ -425,7 +411,6 @@ async def run_bot():
     finally:
         if "app" in locals() and app.is_initialized:
             await app.stop()
-
 
 # ==========================================
 # 5. STREAMLIT BOOTSTRAPPER
