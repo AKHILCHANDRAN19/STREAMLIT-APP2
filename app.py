@@ -2,7 +2,6 @@ import streamlit as st
 import asyncio
 import threading
 import os
-import time
 import subprocess
 import collections
 from datetime import datetime
@@ -15,6 +14,7 @@ import thumbnail
 import scrapping
 import tts
 import script
+import sevendayComparison
 
 # ==========================================
 # 1. STREAMLIT UI & TELEMETRY
@@ -60,7 +60,6 @@ with col2:
 # ==========================================
 async def run_bot():
     try:
-        # Load API credentials from Streamlit Secrets
         app = Client(
             "gold_bot_session",
             api_id=int(st.secrets["API_ID"]),
@@ -74,15 +73,43 @@ async def run_bot():
             welcome_text = (
                 "👋 **Kerala Gold Desk Bot Online.**\n\n"
                 "**Available Commands:**\n"
-                "• `/scrapeakg` — Today's 22K rate from AKGSMA (1g & 1 pavan)\n"
-                "• `/scrapegd` — GoodReturns 22K rate & 8-day history\n"
-                "• `/scriptakg` — Generate Malayalam Script (AKGSMA + GoodReturns history)\n"
-                "• `/scriptgd` — Generate Malayalam Script (GoodReturns only)\n"
-                "• `/genthumb` — Generate high-contrast thumbnails\n"
-                "• `/tts <text>` — Generate Malayalam Voiceover\n"
-                "• `/generate` — Render and upload intro video"
+                "• `/scrapeakg` — Live 22K rate from AKGSMA\n"
+                "• `/scrapegd` — GoodReturns 22K rate & history\n"
+                "• `/scriptakg` — Malayalam Script (AKGSMA)\n"
+                "• `/scriptgd` — Malayalam Script (GoodReturns)\n"
+                "• `/gencomp` — 3D 7-Day Comparison Video\n"
+                "• `/genthumb` — YouTube Thumbnails\n"
+                "• `/tts <text>` — Malayalam Voiceover\n"
+                "• `/generate` — Full Video Pipeline"
             )
             await message.reply_text(welcome_text)
+
+        # ----------------------------------------------------
+        # 7-DAY COMPARISON VIDEO COMMAND (/gencomp)
+        # ----------------------------------------------------
+        @app.on_message(filters.command("gencomp") & filters.private)
+        async def handle_gencomp(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Rendering 3D 7-Day Comparison Video...**")
+            GLOBAL_STATE.set_status("Rendering", "Generating 7-day comparison animation...")
+
+            try:
+                video_path = await asyncio.to_thread(sevendayComparison.main)
+                if video_path and os.path.exists(video_path):
+                    await status_msg.edit_text("⬆️ **Uploading Comparison Video...**")
+                    await client.send_video(
+                        chat_id=message.chat.id,
+                        video=video_path,
+                        caption="📈 **22K Gold 7-Day Price Comparison**\n• Kerala Market Trend & High/Low Analysis"
+                    )
+                    await status_msg.delete()
+                    GLOBAL_STATE.set_status("Idle", "Comparison video uploaded.")
+                else:
+                    await status_msg.edit_text("❌ **Failed to render comparison video.**")
+                    GLOBAL_STATE.set_status("Error", "Comparison rendering failed.")
+            except Exception as e:
+                GLOBAL_STATE.log(f"Gencomp Error: {e}")
+                await status_msg.edit_text(f"❌ **Error generating comparison video:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
 
         # ----------------------------------------------------
         # TTS GENERATOR COMMAND
@@ -90,7 +117,7 @@ async def run_bot():
         @app.on_message(filters.command("tts") & filters.private)
         async def handle_tts(client: Client, message: Message):
             if len(message.text.split()) < 2:
-                return await message.reply_text("❌ **Usage:** `/tts <Malayalam text>`\nExample: `/tts ഇന്നത്തെ സ്വർണ്ണവില`")
+                return await message.reply_text("❌ **Usage:** `/tts <Malayalam text>`")
             
             user_text = message.text.split(maxsplit=1)[1]
             status_msg = await message.reply_text("🗣️ **Generating Voiceover...**")
@@ -98,133 +125,106 @@ async def run_bot():
             
             try:
                 audio_path = await tts.generate_speech(user_text)
-                
                 if audio_path and os.path.exists(audio_path):
                     await client.send_audio(
                         chat_id=message.chat.id,
                         audio=audio_path,
-                        caption=f"🎙️ **Generated Audio:**\n`{user_text}`\n\n*(Saved to Audios/ folder)*"
+                        caption=f"🎙️ **Generated Audio:**\n`{user_text}`"
                     )
                     await status_msg.delete()
                     GLOBAL_STATE.set_status("Idle", "Audio generated successfully.")
                 else:
-                    await status_msg.edit_text("❌ **Failed to generate audio. All engines exhausted.**")
+                    await status_msg.edit_text("❌ **Failed to generate audio.**")
                     GLOBAL_STATE.set_status("Error", "TTS generation failed.")
             except Exception as e:
                 GLOBAL_STATE.log(f"TTS Error: {e}")
-                await status_msg.edit_text(f"❌ **Error generating TTS:** {e}")
+                await status_msg.edit_text(f"❌ **Error:** {e}")
                 GLOBAL_STATE.set_status("Error", str(e))
 
         # ----------------------------------------------------
-        # SCRIPT GENERATOR COMMANDS
+        # SCRIPT GENERATORS
         # ----------------------------------------------------
         @app.on_message(filters.command("scriptakg") & filters.private)
         async def handle_scriptakg(client: Client, message: Message):
             status_msg = await message.reply_text("⏳ **Generating Malayalam Script (AKGSMA)...**")
-            GLOBAL_STATE.set_status("Scripting", "Generating script via AKGSMA...")
             try:
                 script_text = await asyncio.to_thread(script.get_script_akg)
-                await status_msg.edit_text(f"📜 **Generated Script (AKGSMA):**\n\n`{script_text}`")
-                GLOBAL_STATE.set_status("Idle", "Script generated.")
+                await status_msg.edit_text(script_text)
             except Exception as e:
-                GLOBAL_STATE.log(f"Script Error: {e}")
-                await status_msg.edit_text(f"❌ **Error generating script:** {e}")
-                GLOBAL_STATE.set_status("Error", str(e))
+                await status_msg.edit_text(f"❌ **Error:** {e}")
 
         @app.on_message(filters.command("scriptgd") & filters.private)
         async def handle_scriptgd(client: Client, message: Message):
             status_msg = await message.reply_text("⏳ **Generating Malayalam Script (GoodReturns)...**")
-            GLOBAL_STATE.set_status("Scripting", "Generating script via GoodReturns...")
             try:
                 script_text = await asyncio.to_thread(script.get_script_gd)
-                await status_msg.edit_text(f"📜 **Generated Script (GoodReturns):**\n\n`{script_text}`")
-                GLOBAL_STATE.set_status("Idle", "Script generated.")
+                await status_msg.edit_text(script_text)
             except Exception as e:
-                GLOBAL_STATE.log(f"Script Error: {e}")
-                await status_msg.edit_text(f"❌ **Error generating script:** {e}")
-                GLOBAL_STATE.set_status("Error", str(e))
+                await status_msg.edit_text(f"❌ **Error:** {e}")
 
         # ----------------------------------------------------
-        # SCRAPE AKGSMA COMMAND
+        # SCRAPE COMMANDS
         # ----------------------------------------------------
         @app.on_message(filters.command("scrapeakg") & filters.private)
         async def handle_scrapeakg(client: Client, message: Message):
-            status_msg = await message.reply_text("⏳ **Fetching 22K Gold Data from AKGSMA...**")
-            GLOBAL_STATE.set_status("Scraping", "Fetching AKGSMA live rate...")
-            
+            status_msg = await message.reply_text("⏳ **Fetching AKGSMA Data...**")
             try:
                 report = await asyncio.to_thread(scrapping.get_akgsma_report)
                 await status_msg.edit_text(report)
-                GLOBAL_STATE.set_status("Idle", "AKGSMA data retrieved successfully.")
             except Exception as e:
-                GLOBAL_STATE.log(f"AKGSMA Scrape Error: {e}")
-                await status_msg.edit_text(f"❌ **Error fetching AKGSMA:** {e}")
-                GLOBAL_STATE.set_status("Error", str(e))
+                await status_msg.edit_text(f"❌ **Error:** {e}")
 
-        # ----------------------------------------------------
-        # SCRAPE GOODRETURNS COMMAND
-        # ----------------------------------------------------
         @app.on_message(filters.command("scrapegd") & filters.private)
         async def handle_scrapegd(client: Client, message: Message):
-            status_msg = await message.reply_text("⏳ **Fetching 22K Gold Data from GoodReturns...**")
-            GLOBAL_STATE.set_status("Scraping", "Fetching GoodReturns history...")
-            
+            status_msg = await message.reply_text("⏳ **Fetching GoodReturns Data...**")
             try:
                 report = await asyncio.to_thread(scrapping.get_goodreturns_report)
                 await status_msg.edit_text(report)
-                GLOBAL_STATE.set_status("Idle", "GoodReturns data retrieved successfully.")
             except Exception as e:
-                GLOBAL_STATE.log(f"GoodReturns Scrape Error: {e}")
-                await status_msg.edit_text(f"❌ **Error fetching GoodReturns:** {e}")
-                GLOBAL_STATE.set_status("Error", str(e))
+                await status_msg.edit_text(f"❌ **Error:** {e}")
 
         # ----------------------------------------------------
-        # THUMBNAIL GENERATOR COMMAND
+        # THUMBNAIL GENERATOR
         # ----------------------------------------------------
         @app.on_message(filters.command("genthumb") & filters.private)
         async def handle_genthumb(client: Client, message: Message):
             status_msg = await message.reply_text("🖼️ **Generating Thumbnails...**")
-            
             try:
-                GLOBAL_STATE.set_status("Thumbnail", "Generating YouTube Thumbnails...")
                 await asyncio.to_thread(thumbnail.main)
-                
-                thumb1_path = os.path.join("Images", "thumbnail_1.png")
-                thumb2_path = os.path.join("Images", "thumbnail_2.png")
-                
-                if os.path.exists(thumb1_path):
-                    await client.send_photo(chat_id=message.chat.id, photo=thumb1_path, caption="🥇 **Thumbnail 1**")
-                
-                if os.path.exists(thumb2_path):
-                    await client.send_photo(chat_id=message.chat.id, photo=thumb2_path, caption="🥇 **Thumbnail 2**")
-                
+                t1 = os.path.join("Images", "thumbnail_1.png")
+                t2 = os.path.join("Images", "thumbnail_2.png")
+                if os.path.exists(t1):
+                    await client.send_photo(chat_id=message.chat.id, photo=t1, caption="🥇 **Thumbnail 1**")
+                if os.path.exists(t2):
+                    await client.send_photo(chat_id=message.chat.id, photo=t2, caption="🥇 **Thumbnail 2**")
                 await status_msg.delete()
-                GLOBAL_STATE.set_status("Idle", "Thumbnails generated successfully.")
             except Exception as e:
-                GLOBAL_STATE.log(f"Thumbnail Error: {e}")
-                await status_msg.edit_text(f"❌ **Error generating thumbnails:** {e}")
-                GLOBAL_STATE.set_status("Error", str(e))
+                await status_msg.edit_text(f"❌ **Error:** {e}")
 
         # ----------------------------------------------------
-        # VIDEO GENERATOR PIPELINE COMMAND
+        # FULL PIPELINE GENERATOR
         # ----------------------------------------------------
         @app.on_message(filters.command("generate") & filters.private)
         async def handle_generate(client: Client, message: Message):
-            status_msg = await message.reply_text("🔄 **Initializing Pipeline...**")
-            
+            status_msg = await message.reply_text("🔄 **Initializing Full Video Pipeline...**")
             try:
-                GLOBAL_STATE.set_status("Rendering", "Generating Cinematic Intro...")
-                await status_msg.edit_text("🎬 **Rendering 3D Intro Video...** (This takes a moment)")
+                GLOBAL_STATE.set_status("Rendering", "Generating Intro...")
+                await status_msg.edit_text("🎬 **Rendering 3D Intro Video...**")
                 await asyncio.to_thread(intro.main)
 
-                GLOBAL_STATE.set_status("Merging", "Stitching video chunks via FFmpeg...")
-                await status_msg.edit_text("🗜️ **Stitching final video...**")
+                GLOBAL_STATE.set_status("Rendering", "Generating 7-Day Comparison...")
+                await status_msg.edit_text("📊 **Rendering 7-Day Comparison...**")
+                await asyncio.to_thread(sevendayComparison.main)
+
+                GLOBAL_STATE.set_status("Merging", "Stitching video segments via FFmpeg...")
+                await status_msg.edit_text("🗜️ **Stitching final video chunks...**")
                 
                 concat_file = os.path.join("Videos", "inputs.txt")
                 final_output = os.path.join("Videos", "FINAL_UPLOAD.mp4")
                 
                 with open(concat_file, "w") as f:
                     f.write("file 'intro.mp4'\n")
+                    f.write("file 'sevenday_comparison.mp4'\n")
 
                 ffmpeg_cmd = [
                     "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
@@ -232,25 +232,21 @@ async def run_bot():
                 ]
                 subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                GLOBAL_STATE.set_status("Uploading", "Sending final video to Telegram...")
-                await status_msg.edit_text("⬆️ **Uploading final video to chat...**")
-                
+                await status_msg.edit_text("⬆️ **Uploading final video to Telegram...**")
                 await client.send_video(
                     chat_id=message.chat.id,
                     video=final_output,
-                    caption="🥇 **ഇന്നത്തെ സ്വർണ്ണവില**\nHere is your generated video."
+                    caption="🥇 **ഇന്നത്തെ സ്വർണ്ണവില റിപ്പോർട്ട്**\nIntro & 7-Day Market Trend"
                 )
-                
                 await status_msg.delete()
-                GLOBAL_STATE.set_status("Idle", "Render complete. Waiting for next run.")
+                GLOBAL_STATE.set_status("Idle", "Pipeline complete.")
             except Exception as e:
                 GLOBAL_STATE.log(f"Pipeline Error: {e}")
-                await status_msg.edit_text(f"❌ **Error during generation:** {e}")
+                await status_msg.edit_text(f"❌ **Error:** {e}")
                 GLOBAL_STATE.set_status("Error", str(e))
 
         await app.start()
-        GLOBAL_STATE.log("Bot authenticated and listening for commands.")
-        
+        GLOBAL_STATE.log("Bot connected and listening for commands.")
         await asyncio.Event().wait()
 
     except Exception as e:
