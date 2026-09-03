@@ -242,7 +242,6 @@ def draw_animated_pillar(
             curr_y -= 12
         canvas.alpha_composite(anno_layer)
 
-        # Floating numbers over pillars
         num_color = (*theme["icon_color"][:3], alpha)
         draw_text_safe(
             canvas,
@@ -429,17 +428,6 @@ def main(source="goodreturns", output_override=None):
     yest_1g = gr_data.get('yest_1g', 0)
     today_8g = today_1g * 8
 
-    # Dynamic Height adjustment matching relative trends
-    if today_1g > yest_1g:
-        yest_h = 470
-        today_h = 620
-    elif today_1g < yest_1g:
-        yest_h = 620
-        today_h = 470
-    else:
-        yest_h = 550
-        today_h = 550
-
     # Pre-render Background Layer
     bg_np = linear_gradient_2d(
         WIDTH, HEIGHT, (244, 248, 252, 255), (232, 240, 248, 255)
@@ -461,9 +449,8 @@ def main(source="goodreturns", output_override=None):
     rx, ry, cy_base = 92, 46, 920
 
     # =========================================================================
-    # EXACT TWO COLOR PALETTES FROM YOUR SCRIPT
-    # ==========================================
-    # Palette 1: Turquoise / Cyan (The "other" color from Bar 1)
+    # THE TWO EXACT COLOR PALETTES FROM YOUR SCRIPT
+    # =========================================================================
     THEME_TURQUOISE = {
         "icon_color": (0, 170, 155, 255),
         "top_light": (0, 255, 210, 255),
@@ -474,7 +461,6 @@ def main(source="goodreturns", output_override=None):
         "right_bot": (130, 245, 210, 185),
     }
 
-    # Palette 2: Glassy Pink / Red (The red color from Bar 2)
     THEME_RED = {
         "icon_color": (230, 25, 90, 255),
         "top_light": (255, 75, 125, 255),
@@ -485,31 +471,40 @@ def main(source="goodreturns", output_override=None):
         "right_bot": (255, 95, 140, 195),
     }
 
-    # Rule: If today's price is less than yesterday -> RED.
-    #       If today's price is greater than yesterday -> THE OTHER COLOR (Turquoise).
-    if today_1g < yest_1g:
-        today_bar_theme = THEME_RED
+    # =========================================================================
+    # OPPOSING CONTRAST LOGIC
+    # If today > yesterday: Yesterday is RED (low), Today is TURQUOISE (high).
+    # If today < yesterday: Yesterday is TURQUOISE (high), Today is RED (low).
+    # =========================================================================
+    if today_1g >= yest_1g:
+        yest_h = 470
+        today_h = 620
+        yest_theme = THEME_RED
+        today_theme = THEME_TURQUOISE
     else:
-        today_bar_theme = THEME_TURQUOISE
+        yest_h = 620
+        today_h = 470
+        yest_theme = THEME_TURQUOISE
+        today_theme = THEME_RED
 
     columns = [
-        # Bar 1: Yesterday's Bar (Always Turquoise)
+        # Bar 1: Yesterday's Bar
         {
             "cx": 360,
             "target_h": yest_h,
             "top_num": f"₹{int(yest_1g)}",
             "date_text": date_yesterday,
             "stagger_start": 0,
-            **THEME_TURQUOISE
+            **yest_theme
         },
-        # Bar 2: Today's Bar (Red if dropped, Turquoise if increased)
+        # Bar 2: Today's Bar
         {
             "cx": 780,
             "target_h": today_h,
             "top_num": f"₹{int(today_1g)}",
             "date_text": date_today,
             "stagger_start": 10,
-            **today_bar_theme
+            **today_theme
         },
     ]
 
