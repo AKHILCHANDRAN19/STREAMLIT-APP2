@@ -9,10 +9,10 @@ from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Import your modules
+# Import project modules
 import intro
 import thumbnail
-# import Scrappping
+import scrapping
 # import price_22k
 # import sevendayComparison
 
@@ -60,7 +60,7 @@ with col2:
 # ==========================================
 async def run_bot():
     try:
-        # Pull API credentials from Streamlit Cloud Secrets
+        # Load API credentials from Streamlit Secrets
         app = Client(
             "gold_bot_session",
             api_id=int(st.secrets["API_ID"]),
@@ -71,25 +71,66 @@ async def run_bot():
 
         @app.on_message(filters.command("start") & filters.private)
         async def handle_start(client: Client, message: Message):
-            await message.reply_text(
+            welcome_text = (
                 "👋 **Kerala Gold Desk Bot Online.**\n\n"
-                "Available Commands:\n"
-                "• `/generate` - Render full intro video\n"
-                "• `/genthumb` - Generate YouTube thumbnails"
+                "**Available Commands:**\n"
+                "• `/scrapeakg` — Today's 22K rate from AKGSMA (1g & 1 pavan)\n"
+                "• `/scrapegd` — GoodReturns 22K rate & 8-day history\n"
+                "• `/genthumb` — Generate high-contrast thumbnails\n"
+                "• `/generate` — Render and upload intro video"
             )
+            await message.reply_text(welcome_text)
 
+        # ----------------------------------------------------
+        # SCRAPE AKGSMA COMMAND
+        # ----------------------------------------------------
+        @app.on_message(filters.command("scrapeakg") & filters.private)
+        async def handle_scrapeakg(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Fetching 22K Gold Data from AKGSMA...**")
+            GLOBAL_STATE.set_status("Scraping", "Fetching AKGSMA live rate...")
+            
+            try:
+                report = await asyncio.to_thread(scrapping.get_akgsma_report)
+                await status_msg.edit_text(report)
+                GLOBAL_STATE.set_status("Idle", "AKGSMA data retrieved successfully.")
+                GLOBAL_STATE.log(f"Sent AKGSMA report to user {message.from_user.id}")
+            except Exception as e:
+                GLOBAL_STATE.log(f"AKGSMA Scrape Error: {e}")
+                await status_msg.edit_text(f"❌ **Error fetching AKGSMA:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
+
+        # ----------------------------------------------------
+        # SCRAPE GOODRETURNS COMMAND
+        # ----------------------------------------------------
+        @app.on_message(filters.command("scrapegd") & filters.private)
+        async def handle_scrapegd(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Fetching 22K Gold Data from GoodReturns...**")
+            GLOBAL_STATE.set_status("Scraping", "Fetching GoodReturns history...")
+            
+            try:
+                report = await asyncio.to_thread(scrapping.get_goodreturns_report)
+                await status_msg.edit_text(report)
+                GLOBAL_STATE.set_status("Idle", "GoodReturns data retrieved successfully.")
+                GLOBAL_STATE.log(f"Sent GoodReturns report to user {message.from_user.id}")
+            except Exception as e:
+                GLOBAL_STATE.log(f"GoodReturns Scrape Error: {e}")
+                await status_msg.edit_text(f"❌ **Error fetching GoodReturns:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
+
+        # ----------------------------------------------------
+        # THUMBNAIL GENERATOR COMMAND
+        # ----------------------------------------------------
         @app.on_message(filters.command("genthumb") & filters.private)
         async def handle_genthumb(client: Client, message: Message):
             status_msg = await message.reply_text("🖼️ **Generating Thumbnails...**")
             
             try:
                 GLOBAL_STATE.set_status("Thumbnail", "Generating YouTube Thumbnails...")
-                thumbnail.main() 
+                await asyncio.to_thread(thumbnail.main)
                 
                 thumb1_path = os.path.join("Images", "thumbnail_1.png")
                 thumb2_path = os.path.join("Images", "thumbnail_2.png")
                 
-                # Upload Thumbnail 1
                 if os.path.exists(thumb1_path):
                     await client.send_photo(
                         chat_id=message.chat.id,
@@ -97,7 +138,6 @@ async def run_bot():
                         caption="🥇 **Thumbnail 1: ഇന്നത്തെ സ്വർണ്ണവില കേരളം**"
                     )
                 
-                # Upload Thumbnail 2
                 if os.path.exists(thumb2_path):
                     await client.send_photo(
                         chat_id=message.chat.id,
@@ -114,26 +154,20 @@ async def run_bot():
                 await status_msg.edit_text(f"❌ **Error generating thumbnails:** {e}")
                 GLOBAL_STATE.set_status("Error", str(e))
 
+        # ----------------------------------------------------
+        # VIDEO GENERATOR PIPELINE COMMAND
+        # ----------------------------------------------------
         @app.on_message(filters.command("generate") & filters.private)
         async def handle_generate(client: Client, message: Message):
             status_msg = await message.reply_text("🔄 **Initializing Pipeline...**")
             
             try:
-                # STEP 1: Scraping
-                GLOBAL_STATE.set_status("Scraping", "Fetching latest gold prices...")
-                await status_msg.edit_text("🔄 **Scraping latest market data...**")
-                # Scrappping.main() # Execute your scraping logic
-
-                # STEP 2: Render Intro
+                # Render Intro
                 GLOBAL_STATE.set_status("Rendering", "Generating Cinematic Intro...")
                 await status_msg.edit_text("🎬 **Rendering 3D Intro Video...** (This takes a moment)")
-                intro.main() 
+                await asyncio.to_thread(intro.main)
 
-                # STEP 3: Render Daily Price & 7-Day Comparison
-                # price_22k.main()
-                # sevendayComparison.main()
-
-                # STEP 4: FFmpeg Concatenation
+                # Concatenate with FFmpeg
                 GLOBAL_STATE.set_status("Merging", "Stitching video chunks via FFmpeg...")
                 await status_msg.edit_text("🗜️ **Stitching final video...**")
                 
@@ -142,8 +176,6 @@ async def run_bot():
                 
                 with open(concat_file, "w") as f:
                     f.write("file 'intro.mp4'\n")
-                    # f.write("file '22k_price.mp4'\n")
-                    # f.write("file 'sevenday_comparison.mp4'\n")
 
                 ffmpeg_cmd = [
                     "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
@@ -151,14 +183,14 @@ async def run_bot():
                 ]
                 subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                # STEP 5: Upload to Telegram
+                # Upload to Telegram
                 GLOBAL_STATE.set_status("Uploading", "Sending final video to Telegram...")
                 await status_msg.edit_text("⬆️ **Uploading final video to chat...**")
                 
                 await client.send_video(
                     chat_id=message.chat.id,
                     video=final_output,
-                    caption="🥇 **ഇന്നത്തെ സ്വർണ്ണവില**\nHere is your generated video.",
+                    caption="🥇 **ഇന്നത്തെ സ്വർണ്ണവില**\nHere is your generated video."
                 )
                 
                 await status_msg.delete()
@@ -173,7 +205,7 @@ async def run_bot():
         await app.start()
         GLOBAL_STATE.log("Bot authenticated and listening for commands.")
         
-        # THE MAGIC FIX: Keeps thread alive without triggering OS signals
+        # Keep background thread alive without touching OS signals
         await asyncio.Event().wait()
 
     except Exception as e:
@@ -181,6 +213,7 @@ async def run_bot():
     finally:
         if 'app' in locals() and app.is_initialized:
             await app.stop()
+
 
 # ==========================================
 # 3. STREAMLIT BOOTSTRAPPER
