@@ -15,6 +15,7 @@ import scrapping
 import tts
 import script
 import sevendayComparison
+import price_22k
 
 # ==========================================
 # 1. STREAMLIT UI & TELEMETRY
@@ -73,6 +74,8 @@ async def run_bot():
             welcome_text = (
                 "👋 **Kerala Gold Desk Bot Online.**\n\n"
                 "**Available Commands:**\n"
+                "• `/priceakg` — Render 3D Price Chart (AKGSMA)\n"
+                "• `/pricegd` — Render 3D Price Chart (GoodReturns)\n"
                 "• `/scrapeakg` — Live 22K rate from AKGSMA\n"
                 "• `/scrapegd` — GoodReturns 22K rate & history\n"
                 "• `/scriptakg` — Malayalam Script (AKGSMA)\n"
@@ -85,13 +88,47 @@ async def run_bot():
             await message.reply_text(welcome_text)
 
         # ----------------------------------------------------
+        # 3D DAILY PRICE VIDEO COMMANDS
+        # ----------------------------------------------------
+        @app.on_message(filters.command("priceakg") & filters.private)
+        async def handle_priceakg(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Rendering 3D Price Chart (AKGSMA)...**")
+            GLOBAL_STATE.set_status("Rendering", "Generating AKGSMA price chart...")
+            try:
+                vid_path = await asyncio.to_thread(price_22k.main, source="akgsma")
+                if vid_path and os.path.exists(vid_path):
+                    await status_msg.edit_text("⬆️ **Uploading Video...**")
+                    await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📊 **22K Gold Price Update (AKGSMA)**")
+                    await status_msg.delete()
+                    GLOBAL_STATE.set_status("Idle", "Video uploaded.")
+                else:
+                    await status_msg.edit_text("❌ **Failed to render video.**")
+            except Exception as e:
+                await status_msg.edit_text(f"❌ **Error:** {e}")
+
+        @app.on_message(filters.command("pricegd") & filters.private)
+        async def handle_pricegd(client: Client, message: Message):
+            status_msg = await message.reply_text("⏳ **Rendering 3D Price Chart (GoodReturns)...**")
+            GLOBAL_STATE.set_status("Rendering", "Generating GoodReturns price chart...")
+            try:
+                vid_path = await asyncio.to_thread(price_22k.main, source="goodreturns")
+                if vid_path and os.path.exists(vid_path):
+                    await status_msg.edit_text("⬆️ **Uploading Video...**")
+                    await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📊 **22K Gold Price Update (GoodReturns)**")
+                    await status_msg.delete()
+                    GLOBAL_STATE.set_status("Idle", "Video uploaded.")
+                else:
+                    await status_msg.edit_text("❌ **Failed to render video.**")
+            except Exception as e:
+                await status_msg.edit_text(f"❌ **Error:** {e}")
+
+        # ----------------------------------------------------
         # 7-DAY COMPARISON VIDEO COMMAND (/gencomp)
         # ----------------------------------------------------
         @app.on_message(filters.command("gencomp") & filters.private)
         async def handle_gencomp(client: Client, message: Message):
             status_msg = await message.reply_text("⏳ **Rendering 3D 7-Day Comparison Video...**")
             GLOBAL_STATE.set_status("Rendering", "Generating 7-day comparison animation...")
-
             try:
                 video_path = await asyncio.to_thread(sevendayComparison.main)
                 if video_path and os.path.exists(video_path):
@@ -122,15 +159,10 @@ async def run_bot():
             user_text = message.text.split(maxsplit=1)[1]
             status_msg = await message.reply_text("🗣️ **Generating Voiceover...**")
             GLOBAL_STATE.set_status("TTS", "Generating audio via Gemini/Cartesia...")
-            
             try:
                 audio_path = await tts.generate_speech(user_text)
                 if audio_path and os.path.exists(audio_path):
-                    await client.send_audio(
-                        chat_id=message.chat.id,
-                        audio=audio_path,
-                        caption=f"🎙️ **Generated Audio:**\n`{user_text}`"
-                    )
+                    await client.send_audio(chat_id=message.chat.id, audio=audio_path, caption=f"🎙️ **Generated Audio:**\n`{user_text}`")
                     await status_msg.delete()
                     GLOBAL_STATE.set_status("Idle", "Audio generated successfully.")
                 else:
@@ -271,3 +303,4 @@ def start_background_bot():
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_background_bot()
+
