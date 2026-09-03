@@ -13,8 +13,7 @@ from pyrogram.types import Message
 import intro
 import thumbnail
 import scrapping
-# import price_22k
-# import sevendayComparison
+import tts
 
 # ==========================================
 # 1. STREAMLIT UI & TELEMETRY
@@ -77,9 +76,43 @@ async def run_bot():
                 "• `/scrapeakg` — Today's 22K rate from AKGSMA (1g & 1 pavan)\n"
                 "• `/scrapegd` — GoodReturns 22K rate & 8-day history\n"
                 "• `/genthumb` — Generate high-contrast thumbnails\n"
+                "• `/tts <text>` — Generate Malayalam Voiceover\n"
                 "• `/generate` — Render and upload intro video"
             )
             await message.reply_text(welcome_text)
+
+        # ----------------------------------------------------
+        # TTS GENERATOR COMMAND
+        # ----------------------------------------------------
+        @app.on_message(filters.command("tts") & filters.private)
+        async def handle_tts(client: Client, message: Message):
+            if len(message.text.split()) < 2:
+                return await message.reply_text("❌ **Usage:** `/tts <Malayalam text>`\nExample: `/tts ഇന്നത്തെ സ്വർണ്ണവില`")
+            
+            user_text = message.text.split(maxsplit=1)[1]
+            status_msg = await message.reply_text("🗣️ **Generating Voiceover...**")
+            GLOBAL_STATE.set_status("TTS", "Generating audio via Gemini/Cartesia...")
+            
+            try:
+                # Execute TTS generation (This function is already async in tts.py)
+                audio_path = await tts.generate_speech(user_text)
+                
+                if audio_path and os.path.exists(audio_path):
+                    await client.send_audio(
+                        chat_id=message.chat.id,
+                        audio=audio_path,
+                        caption=f"🎙️ **Generated Audio:**\n`{user_text}`\n\n*(This file is now saved in the Audios/ folder and will be randomly selected during the next /generate run)*"
+                    )
+                    await status_msg.delete()
+                    GLOBAL_STATE.set_status("Idle", "Audio generated successfully.")
+                    GLOBAL_STATE.log("Voiceover generated and uploaded to Telegram.")
+                else:
+                    await status_msg.edit_text("❌ **Failed to generate audio. All engines exhausted.**")
+                    GLOBAL_STATE.set_status("Error", "TTS generation failed.")
+            except Exception as e:
+                GLOBAL_STATE.log(f"TTS Error: {e}")
+                await status_msg.edit_text(f"❌ **Error generating TTS:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
 
         # ----------------------------------------------------
         # SCRAPE AKGSMA COMMAND
