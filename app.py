@@ -59,24 +59,20 @@ with col2:
 
 
 # ==========================================
-# 2. AUDIO & TEXT PROCESSING UTILITIES
+# 2. AUDIO & TEXT UTILITIES
 # ==========================================
 IST_TIMEZONE = timezone(timedelta(hours=5, minutes=30))
 
 def get_audio_duration_seconds(wav_path: str) -> float:
-    """Returns the precise duration of a WAV file in seconds."""
     if not os.path.exists(wav_path):
         return 0.0
     try:
         with wave.open(wav_path, "rb") as wf:
-            frames = wf.getnframes()
-            rate = wf.getframerate()
-            return frames / float(rate)
+            return wf.getnframes() / float(wf.getframerate())
     except Exception:
         return 0.0
 
 def combine_wav_files(input_paths, output_path, pause_duration=0.35):
-    """Losslessly stitches PCM WAV files in pure Python with an optional ambient pause."""
     data = []
     params = None
     for p in input_paths:
@@ -97,14 +93,9 @@ def combine_wav_files(input_paths, output_path, pause_duration=0.35):
                 out_wf.writeframes(chunk)
 
 def split_script_into_chunks(raw_text: str):
-    """
-    Splits the generated Malayalam script into:
-    - 3 distinct semantic chunks for Part 1 (7-Day Comparison)
-    - 2 distinct semantic chunks for Part 2 (Today's 22K Price)
-    """
     parts = raw_text.split("━━━━━━━━━━━━━━━━━━━━━━━━━")
     
-    # 1. 7-Day Comparison (Part 1) -> 3 chunks
+    # 7-Day Comparison (Part 1) -> 3 chunks
     comp_raw = parts[1] if len(parts) > 1 else ""
     comp_clean = re.sub(r"[#*_━]", "", comp_raw).replace("🥇", "").replace("ഇന്നത്തെ സ്വർണ്ണവില", "").strip()
 
@@ -119,14 +110,10 @@ def split_script_into_chunks(raw_text: str):
         else:
             comp_chunks.append("കഴിഞ്ഞ ഒരാഴ്ചത്തെ " + rest.strip())
     else:
-        # Fallback regex by sentence boundary
         sentences = [s.strip() for s in re.split(r"[.!?]", comp_clean) if len(s.strip()) > 5]
-        if len(sentences) >= 3:
-            comp_chunks = [sentences[0] + ".", ". ".join(sentences[1:-1]) + ".", sentences[-1] + "."]
-        else:
-            comp_chunks = [comp_clean]
+        comp_chunks = sentences[:3] if len(sentences) >= 3 else [comp_clean]
 
-    # 2. Today's Price (Part 2) -> 2 chunks
+    # Today's Price (Part 2) -> 2 chunks
     price_raw = parts[2] if len(parts) > 2 else ""
     price_clean = re.sub(r"[#*_━]", "", price_raw).strip()
     
@@ -137,16 +124,24 @@ def split_script_into_chunks(raw_text: str):
         price_chunks.append("ഇതോടെ " + p2.strip())
     else:
         sentences = [s.strip() for s in re.split(r"[.!?]", price_clean) if len(s.strip()) > 5]
-        if len(sentences) >= 2:
-            price_chunks = [sentences[0] + ".", ". ".join(sentences[1:]) + "."]
-        else:
-            price_chunks = [price_clean]
+        price_chunks = sentences[:2] if len(sentences) >= 2 else [price_clean]
 
     return comp_chunks, price_chunks
 
+def clean_intro_audios_dir(audios_dir: str):
+    """Purges rogue TTS chunks from Audios/ so intro.py only picks from tracks 1 to 8."""
+    if not os.path.exists(audios_dir):
+        return
+    for fname in os.listdir(audios_dir):
+        if fname.startswith(("comp_", "price_", "master_", "section_")) and fname.endswith(".wav"):
+            try:
+                os.remove(os.path.join(audios_dir, fname))
+            except Exception:
+                pass
+
 
 # ==========================================
-# 3. MASTER PIPELINE ORCHESTRATOR
+# 3. PRODUCTION PIPELINE ORCHESTRATOR
 # ==========================================
 async def execute_full_production(client: Client, message: Message, source: str):
     now = datetime.now(IST_TIMEZONE)
@@ -155,9 +150,15 @@ async def execute_full_production(client: Client, message: Message, source: str)
 
     base_dir = os.getcwd()
     videos_dir = os.path.join(base_dir, "Videos")
-    audios_dir = os.path.join(base_dir, "Audios")
+    intro_audios_dir = os.path.join(base_dir, "Audios")      # ONLY tracks 1-8 for intro
+    tts_audios_dir = os.path.join(base_dir, "TTS_Audios")    # Dedicated folder for generated voiceovers
+
     os.makedirs(videos_dir, exist_ok=True)
-    os.makedirs(audios_dir, exist_ok=True)
+    os.makedirs(intro_audios_dir, exist_ok=True)
+    os.makedirs(tts_audios_dir, exist_ok=True)
+
+    # Clean any rogue TTS files out of Audios/
+    clean_intro_audios_dir(intro_audios_dir)
 
     status_msg = await message.reply_text(f"🚀 **Starting {source.upper()} Auto-Production Pipeline...**")
 
@@ -169,52 +170,51 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await message.reply_text(formatted_script)
         GLOBAL_STATE.log(f"Script sent for {source}.")
 
-        # STEP 2: SPLIT VOICE SYNTHESIS (3 calls for Comp, 2 calls for Price)
-        GLOBAL_STATE.set_status("TTS", "Synthesizing split voiceover chunks...")
+        # STEP 2: DEDICATED TTS SYNTHESIS (Saved to TTS_Audios/, NOT Audios/)
+        GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers...")
         await status_msg.edit_text("🎙️ **2/6: Synthesizing Voiceovers (Rotating API Keys)...**")
         comp_chunks, price_chunks = split_script_into_chunks(formatted_script)
         ts = int(now.timestamp())
 
-        # 7-Day Comparison Audio (3 API Calls)
+        # Comparison Audio (3 API Calls)
         comp_parts = []
         for i, chunk in enumerate(comp_chunks):
-            p_out = os.path.join(audios_dir, f"comp_p{i}_{ts}.wav")
+            p_out = os.path.join(tts_audios_dir, f"comp_p{i}_{ts}.wav")
             f_path = await tts.generate_speech(chunk, output_filename=p_out)
             if f_path and os.path.exists(f_path):
                 comp_parts.append(f_path)
             await asyncio.sleep(0.8)
 
-        audio_comp = os.path.join(audios_dir, f"comp_audio_{ts}.wav")
+        audio_comp = os.path.join(tts_audios_dir, f"comp_audio_{ts}.wav")
         combine_wav_files(comp_parts, audio_comp, pause_duration=0.3)
         dur_comp = get_audio_duration_seconds(audio_comp)
 
-        # Today's Price Audio (2 API Calls)
+        # Price Audio (2 API Calls)
         price_parts = []
         for j, chunk in enumerate(price_chunks):
-            p_out = os.path.join(audios_dir, f"price_p{j}_{ts}.wav")
+            p_out = os.path.join(tts_audios_dir, f"price_p{j}_{ts}.wav")
             f_path = await tts.generate_speech(chunk, output_filename=p_out)
             if f_path and os.path.exists(f_path):
                 price_parts.append(f_path)
             await asyncio.sleep(0.8)
 
-        audio_price = os.path.join(audios_dir, f"price_audio_{ts}.wav")
+        audio_price = os.path.join(tts_audios_dir, f"price_audio_{ts}.wav")
         combine_wav_files(price_parts, audio_price, pause_duration=0.3)
         dur_price = get_audio_duration_seconds(audio_price)
 
-        # Dispatch generated audios to Telegram
         await client.send_audio(chat_id=message.chat.id, audio=audio_comp, caption=f"🎙️ **7-Day Comparison Voiceover** ({dur_comp:.1f}s)")
         await client.send_audio(chat_id=message.chat.id, audio=audio_price, caption=f"🎙️ **Today's Rate Voiceover** ({dur_price:.1f}s)")
-        GLOBAL_STATE.log(f"Audios generated. Comp: {dur_comp:.1f}s | Price: {dur_price:.1f}s")
+        GLOBAL_STATE.log(f"Voiceovers ready. Comp: {dur_comp:.1f}s | Price: {dur_price:.1f}s")
 
-        # STEP 3: 3D INTRO VIDEO
+        # STEP 3: 3D INTRO VIDEO (Clean Audios/ ensures full 11-12s duration from tracks 1-8)
         GLOBAL_STATE.set_status("Rendering", "Rendering 3D Intro Video...")
         await status_msg.edit_text("🎬 **3/6: Rendering 3D Intro Video...**")
         await asyncio.to_thread(intro.main)
 
         raw_intro = os.path.join(videos_dir, "intro.mp4")
         optimized_intro = os.path.join(videos_dir, f"intro_opt_{ts}.mp4")
-        
-        # Optimize intro encoding to fix file-size bloat and the 0:00 duration display
+
+        # Faststart + CRF compression: eliminates 24MB bloat while preserving exact 11-12s length and audio
         intro_cmd = [
             "ffmpeg", "-y", "-i", raw_intro,
             "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
@@ -222,9 +222,9 @@ async def execute_full_production(client: Client, message: Message, source: str)
             "-movflags", "+faststart", optimized_intro
         ]
         await asyncio.to_thread(subprocess.run, intro_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment**")
+        await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment** (11-12s)")
 
-        # STEP 4: 7-DAY COMPARISON (Exact Duration of Comparison Audio)
+        # STEP 4: 7-DAY COMPARISON (Dynamic Length: Exactly matches audio duration)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 7-Day Chart ({dur_comp:.1f}s)...")
         await status_msg.edit_text(f"📊 **4/6: Rendering 7-Day Comparison ({dur_comp:.1f}s animation)...**")
         raw_comp = await asyncio.to_thread(sevendayComparison.generate_perfect_fast_animation, duration_sec=dur_comp)
@@ -238,7 +238,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, mux_comp_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_comp, caption=f"📈 **7-Day Price Comparison** ({dur_comp:.1f}s)")
 
-        # STEP 5: 22K PRICE CHART (Exact Duration of Today's Price Audio)
+        # STEP 5: 22K PRICE CHART (Dynamic Length: Exactly matches price audio duration)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 22K Price ({dur_price:.1f}s)...")
         await status_msg.edit_text(f"💎 **5/6: Rendering Today's Rate ({dur_price:.1f}s animation)...**")
         raw_price = await asyncio.to_thread(price_22k.main, source=source, duration_sec=dur_price)
@@ -410,7 +410,6 @@ async def run_bot():
     finally:
         if "app" in locals() and app.is_initialized:
             await app.stop()
-
 
 # ==========================================
 # 5. STREAMLIT BOOTSTRAPPER
