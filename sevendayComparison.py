@@ -76,13 +76,12 @@ def precompute_date_overlay(pts_dst, day, month, year, f_day, f_month, f_year, W
     return Image.fromarray(warped, mode='RGBA')
 
 def fetch_and_prepare_dataset():
-    """Fetches real 7-day data from GoodReturns and builds dynamic metadata."""
+    """Fetches past 7 days strictly excluding today's price."""
     gr_data = scrapping.scrape_goodreturns_22k()
     history = gr_data.get("history", [])
     now = datetime.datetime.now()
 
-    # Fallback to mock dataset if history is unavailable
-    if not history:
+    if not history or len(history) < 2:
         return [
             {"day": "26", "month": "AUG", "year": "2026", "price_int": 15010, "change": "₹0", "chg_type": "neutral", "target_h": 340.0, "badge": "WEEK HIGH"},
             {"day": "27", "month": "AUG", "year": "2026", "price_int": 14725, "change": "-₹285", "chg_type": "down", "target_h": 295.0, "badge": None},
@@ -93,14 +92,13 @@ def fetch_and_prepare_dataset():
             {"day": "01", "month": "SEP", "year": "2026", "price_int": 14125, "change": "-₹245", "chg_type": "down", "target_h": 195.0, "badge": "WEEK LOW"}
         ]
 
-    # Use up to 8 entries to calculate previous-day differences for all 7 days
-    raw_slice = list(reversed(history[:8]))
-    if len(raw_slice) >= 8:
-        work_slice = raw_slice[1:]
-        has_prev = True
-    else:
-        work_slice = raw_slice
-        has_prev = False
+    # Skip index 0 (Today) and take past 8 items (indices 1 to 8) to calculate 7 deltas
+    raw_past = history[1:9]
+    raw_slice = list(reversed(raw_past))
+
+    # The 7 days to display (oldest to newest, ending yesterday)
+    work_slice = raw_slice[1:] if len(raw_slice) == 8 else raw_slice
+    has_prev = (len(raw_slice) == 8)
 
     prices = [int(item['1g']) for item in work_slice]
     min_p, max_p = min(prices), max(prices)
@@ -134,13 +132,11 @@ def fetch_and_prepare_dataset():
             chg_str = "₹0"
             chg_type = "neutral"
 
-        # Dynamically scale bar height between 195.0 and 340.0
         if max_p > min_p:
             target_h = 195.0 + ((p_curr - min_p) / float(max_p - min_p)) * 145.0
         else:
             target_h = 260.0
 
-        # Dynamic badge allocation
         if i == high_idx:
             badge = "WEEK HIGH"
         elif i == low_idx:
@@ -194,7 +190,7 @@ def generate_perfect_fast_animation(output_override=None):
     f_bar_month = load_font(116)
     f_bar_year  = load_font(108)
 
-    # Load Real Scraped Dataset
+    # Load Real Scraped Dataset (Excluding Today)
     data = fetch_and_prepare_dataset()
 
     # 3D Vector Geometry
@@ -512,3 +508,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
