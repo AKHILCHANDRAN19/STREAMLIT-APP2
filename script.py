@@ -13,6 +13,16 @@ def to_ml_words(num):
     except Exception:
         return str(num)
 
+def to_ordinal_ml(day_num):
+    """
+    Converts numbers to smooth Malayalam ordinal dates.
+    Example: 28 -> 'ഇരുപത്തിയെട്ടാം തീയതി' (avoids 'ഇരുപത്തിയെട്ട്-ൽ' TTS glitch)
+    """
+    words = to_ml_words(day_num).strip()
+    if words.endswith("്"):
+        return words[:-1] + "ാം തീയതി"
+    return words + "ാം തീയതി"
+
 ENG_TO_ML_MONTHS = {
     "Jan": "ജനുവരി", "Feb": "ഫെബ്രുവരി", "Mar": "മാർച്ച്", "Apr": "ഏപ്രിൽ",
     "May": "മെയ്", "Jun": "ജൂൺ", "Jul": "ജൂലൈ", "Aug": "ഓഗസ്റ്റ്",
@@ -20,13 +30,13 @@ ENG_TO_ML_MONTHS = {
 }
 
 def translate_date(date_str):
-    """Converts English date strings to Malayalam."""
+    """Converts English date strings to natural spoken Malayalam."""
     for eng, ml in ENG_TO_ML_MONTHS.items():
         if eng in date_str:
             day_match = re.search(r'\d+', date_str)
             if day_match:
-                day_words = to_ml_words(int(day_match.group()))
-                return f"{ml} {day_words}"
+                day_num = int(day_match.group())
+                return f"{ml} {to_ordinal_ml(day_num)}"
             return date_str.replace(eng, ml)
     return date_str
 
@@ -37,9 +47,9 @@ def translate_date(date_str):
 def generate_audio_script(source="akgsma"):
     """
     Generates the full Malayalam script.
-    source: 'akgsma' for /scriptakg or 'goodreturns' for /scriptgd
+    source: 'akgsma' for /genakg /scriptakg or 'goodreturns' for /gengd /scriptgd
     """
-    # 1. Fetch Data
+    # 1. Fetch Real Scraped Data
     gr_data = scrapping.scrape_goodreturns_22k()
     
     if source == "akgsma":
@@ -54,19 +64,19 @@ def generate_audio_script(source="akgsma"):
     if not history_items or len(history_items) < 8:
         return "❌ Error: Could not retrieve enough market history."
         
-    # Strictly exclude today (index 0). Take the past 7 days (indices 1 to 7)
+    # Strictly exclude today (index 0) and take preceding 7 days (indices 1 to 7)
     past_7_history = history_items[1:8]
     chronological_history = list(reversed(past_7_history))
     
     dates = [translate_date(item['date'].replace(" (Today)", "")) for item in chronological_history]
     weekly_prices = [item['1g'] for item in chronological_history]
     
-    # 2. Daily Price Calculations (Pavan)
+    # 2. Daily Price Calculations
     pavan_price_today = today_1g * 8
     pavan_price_yesterday = yesterday_1g * 8
     pavan_change_amount = pavan_price_today - pavan_price_yesterday
 
-    # 3. Weekly Trend Calculations (Excluding Today)
+    # 3. Weekly Trend Calculations (Preceding 7 Days)
     start_price = weekly_prices[0]
     end_price = weekly_prices[-1]
     weekly_price_difference = abs(start_price - end_price)
@@ -77,7 +87,7 @@ def generate_audio_script(source="akgsma"):
     week_low_price = min(weekly_prices)
     week_low_date = dates[weekly_prices.index(week_low_price)]
 
-    # Weekly Phrase Logic
+    # Weekly Trend Logic
     if sorted(weekly_prices) == weekly_prices:
         weekly_trend_phrase = "തുടർച്ചയായ കുതിപ്പാണ് രേഖപ്പെടുത്തിയിരിക്കുന്നത്"
     elif sorted(weekly_prices, reverse=True) == weekly_prices:
@@ -103,7 +113,14 @@ def generate_audio_script(source="akgsma"):
         time_of_day = "വൈകുന്നേരം"
 
     # 4. Construct Part 1: Seven-Day Comparison
-    part1_template = "നമസ്കാരം. ഇന്നത്തെ സ്വർണ്ണവില വിവരങ്ങളിലേക്ക് സ്വാഗതം. ഇന്നലെ സ്വർണ്ണ വിപണി അവസാനമായി ട്രേഡ് ചെയ്തത് ഗ്രാമിന് {yesterday_price} രൂപ എന്ന നിരക്കിലാണ്. കഴിഞ്ഞ ഒരാഴ്ചത്തെ കണക്കുകൾ പരിശോധിക്കുമ്പോൾ വിപണിയിൽ {weekly_trend_phrase}. ഈ ആഴ്ചയിലെ വിപണി വിലയിരുത്തുമ്പോൾ, സ്വർണ്ണം ഏറ്റവും ഉയരത്തിൽ എത്തിയത് {week_high_date}-ൽ ഗ്രാമിന് {week_high_price} രൂപ എന്ന നിരക്കിലാണ്. എന്നാൽ വിപണി ഏറ്റവും താഴെത്തട്ടിൽ എത്തിയത് {week_low_date}-ൽ ഗ്രാമിന് {week_low_price} രൂപയിലുമാണ്. ചുരുക്കത്തിൽ, കഴിഞ്ഞ ഒരാഴ്ചക്കിടെ ഒരു ഗ്രാം ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണത്തിന് {price_difference} രൂപയുടെ {summary_trend_word} കേരള വിപണിയിൽ ഉണ്ടായിട്ടുള്ളത്."
+    part1_template = (
+        "നമസ്കാരം. ഇന്നത്തെ സ്വർണ്ണവില വിവരങ്ങളിലേക്ക് സ്വാഗതം. "
+        "ഇന്നലെ സ്വർണ്ണ വിപണി അവസാനമായി ട്രേഡ് ചെയ്തത് ഗ്രാമിന് {yesterday_price} രൂപ എന്ന നിരക്കിലാണ്. "
+        "കഴിഞ്ഞ ഒരാഴ്ചത്തെ കണക്കുകൾ പരിശോധിക്കുമ്പോൾ വിപണിയിൽ {weekly_trend_phrase}. "
+        "ഈ ആഴ്ചയിലെ വിപണി വിലയിരുത്തുമ്പോൾ, സ്വർണ്ണം ഏറ്റവും ഉയരത്തിൽ എത്തിയത് {week_high_date} ഗ്രാമിന് {week_high_price} രൂപ എന്ന നിരക്കിലാണ്. "
+        "എന്നാൽ വിപണി ഏറ്റവും താഴെത്തട്ടിൽ എത്തിയത് {week_low_date} ഗ്രാമിന് {week_low_price} രൂപയിലുമാണ്. "
+        "ചുരുക്കത്തിൽ, കഴിഞ്ഞ ഒരാഴ്ചക്കിടെ ഒരു ഗ്രാം ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണത്തിന് {price_difference} രൂപയുടെ {summary_trend_word} കേരള വിപണിയിൽ ഉണ്ടായിട്ടുള്ളത്."
+    )
     
     part1_script = part1_template.format(
         yesterday_price=to_ml_words(yesterday_1g),
@@ -116,16 +133,28 @@ def generate_audio_script(source="akgsma"):
         summary_trend_word=summary_trend_word
     )
 
-    # 5. Construct Part 2: Today's Status (1 Gram first, then Pavan)
+    # 5. Construct Part 2: Today's Price (1 Gram First, 1 Pavan Second)
     if pavan_change_amount > 0:
         change_status = "വർദ്ധിച്ചു"
-        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        part2_template = (
+            "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. "
+            "ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
+            "ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        )
     elif pavan_change_amount < 0:
         change_status = "കുറഞ്ഞു"
-        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        part2_template = (
+            "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. "
+            "ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
+            "ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        )
     else:
         change_status = ""
-        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവിലയിൽ മാറ്റമില്ല. നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        part2_template = (
+            "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവിലയിൽ മാറ്റമില്ല. "
+            "നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
+            "ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        )
 
     part2_script = part2_template.format(
         time_of_day=time_of_day,
@@ -135,7 +164,7 @@ def generate_audio_script(source="akgsma"):
         gram_price=to_ml_words(today_1g)
     )
 
-    # Combine into two distinct sections with beautiful emoji headers and dividers
+    # Structured Telegram display output
     final_output = (
         f"📊 **വിപണി വിശകലനം (Market Comparison)**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -158,6 +187,6 @@ def get_script_gd():
     return generate_audio_script(source="goodreturns")
 
 if __name__ == "__main__":
-    print("\n--- /scriptakg Output ---")
+    print("\n--- Malayalam Script Output ---")
     print(get_script_akg())
 
