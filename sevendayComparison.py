@@ -1,13 +1,11 @@
-import datetime
-import math
 import os
-import re
+import math
 import subprocess
-import sys
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-
+import cv2
+import datetime
+import re
 import scrapping
 
 # --- Physics Easing ---
@@ -52,7 +50,7 @@ def draw_gradient_poly(target_layer, pts, color_top, color_bottom):
 
     target_layer.paste(grad_img, (min_x, min_y), mask_img)
 
-# --- Perspective Date Precomputation ---
+# --- Razor-Sharp Perspective Date Precomputation ---
 def precompute_date_overlay(pts_dst, day, month, year, f_day, f_month, f_year, W, H):
     tw, th = 560, 720
     txt_img = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
@@ -78,6 +76,7 @@ def precompute_date_overlay(pts_dst, day, month, year, f_day, f_month, f_year, W
     return Image.fromarray(warped, mode='RGBA')
 
 def fetch_and_prepare_dataset():
+    """Fetches past 7 days strictly excluding today's price."""
     gr_data = scrapping.scrape_goodreturns_22k()
     history = gr_data.get("history", [])
     now = datetime.datetime.now()
@@ -95,6 +94,7 @@ def fetch_and_prepare_dataset():
 
     raw_past = history[1:9]
     raw_slice = list(reversed(raw_past))
+
     work_slice = raw_slice[1:] if len(raw_slice) == 8 else raw_slice
     has_prev = (len(raw_slice) == 8)
 
@@ -114,37 +114,67 @@ def fetch_and_prepare_dataset():
         year_txt = str(now.year)
 
         p_curr = prices[i]
-        diff = (p_curr - int(raw_slice[i]['1g'])) if has_prev else (0 if i == 0 else p_curr - prices[i - 1])
+        if has_prev:
+            p_prev = int(raw_slice[i]['1g'])
+            diff = p_curr - p_prev
+        else:
+            diff = 0 if i == 0 else p_curr - prices[i - 1]
 
         if diff > 0:
-            chg_str, chg_type = f"+₹{abs(diff)}", "up"
+            chg_str = f"+₹{abs(diff)}"
+            chg_type = "up"
         elif diff < 0:
-            chg_str, chg_type = f"-₹{abs(diff)}", "down"
+            chg_str = f"-₹{abs(diff)}"
+            chg_type = "down"
         else:
-            chg_str, chg_type = "₹0", "neutral"
+            chg_str = "₹0"
+            chg_type = "neutral"
 
-        target_h = 195.0 + ((p_curr - min_p) / float(max_p - min_p)) * 145.0 if max_p > min_p else 260.0
-        badge = "WEEK HIGH" if i == high_idx else ("WEEK LOW" if i == low_idx else None)
+        if max_p > min_p:
+            target_h = 195.0 + ((p_curr - min_p) / float(max_p - min_p)) * 145.0
+        else:
+            target_h = 260.0
+
+        if i == high_idx:
+            badge = "WEEK HIGH"
+        elif i == low_idx:
+            badge = "WEEK LOW"
+        else:
+            badge = None
 
         dataset.append({
-            "day": day_txt, "month": month_txt, "year": year_txt,
-            "price_int": p_curr, "change": chg_str, "chg_type": chg_type,
-            "target_h": float(target_h), "badge": badge
+            "day": day_txt,
+            "month": month_txt,
+            "year": year_txt,
+            "price_int": p_curr,
+            "change": chg_str,
+            "chg_type": chg_type,
+            "target_h": float(target_h),
+            "badge": badge
         })
 
     return dataset
 
 def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     W, H = 1920, 1080
-    FPS = 30
-    TOTAL_FRAMES = max(int(FPS * duration_sec), 150) if duration_sec else 180
+    FPS = 60
+    DEFAULT_FRAMES = 330  # 5.5 Seconds baseline
+
+    if duration_sec:
+        TOTAL_FRAMES = max(DEFAULT_FRAMES, int(FPS * duration_sec))
+    else:
+        TOTAL_FRAMES = DEFAULT_FRAMES
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     font_paths = [
         os.path.join(base_dir, "Fonts", "Roboto-Bold.ttf"),
         os.path.join(base_dir, "Fonts", "Montserrat-Bold.ttf"),
+        os.path.join(base_dir, "Fonts", "Montserrat-ExtraBold.ttf"),
+        "/system/fonts/Roboto-Bold.ttf",
+        "/system/fonts/Roboto-Regular.ttf",
+        "/system/fonts/DroidSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/system/fonts/Roboto-Bold.ttf"
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     ]
     font_path = next((p for p in font_paths if os.path.exists(p)), None)
 
@@ -166,14 +196,17 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     f_bar_month = load_font(116)
     f_bar_year  = load_font(108)
 
+    # 7-Day Gold Dataset
     data = fetch_and_prepare_dataset()
 
+    # 3D Vector Geometry
     u_left   = np.array([-80.0, -25.0])
     v_right  = np.array([85.0, -22.0])
     step_vec = np.array([215.0, -42.0])
     base_origin = np.array([320.0, 970.0])
     bases = [base_origin + i * step_vec for i in range(7)]
 
+    # Colors
     col_top_light   = (58, 178, 255)
     col_top_dark    = (28, 145, 245)
     col_right_light = (0, 142, 248)
@@ -186,11 +219,14 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     color_up   = (30, 150, 60, 255)
     color_neu  = (120, 130, 145, 255)
 
-    # 1. Background
+    print("\n[PRE-BAKING] Pre-computing individual dynamic assets...")
+
+    # 1. Static Studio Background with Header
     y_coords, x_coords = np.ogrid[:H, :W]
     cx, cy = W * 0.38, H * 0.45
     dist = np.sqrt((x_coords - cx) ** 2 + (y_coords - cy) ** 2)
-    t_vignette = np.clip(dist / (np.sqrt(W**2 + H**2) * 0.65), 0.0, 1.0)
+    max_dist = np.sqrt(W**2 + H**2) * 0.65
+    t_vignette = np.clip(dist / max_dist, 0.0, 1.0)
     bg_center = np.array([254, 255, 255], dtype=np.float32)
     bg_edge = np.array([214, 220, 230], dtype=np.float32)
     bg_arr = (1.0 - t_vignette[:, :, None]) * bg_center + t_vignette[:, :, None] * bg_edge
@@ -198,47 +234,74 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     static_bg = Image.fromarray(np.uint8(bg_arr), mode='RGB').convert('RGBA')
     h_draw = ImageDraw.Draw(static_bg)
     h_draw.text((80, 60), "22K PRICE COMPARISON", fill=(0, 108, 235, 255), font=font_title)
-    desc = f"Last 7 Days Gold Rate Trend (per gram) • Kerala, India\nPeriod: {data[0]['month'].capitalize()} {data[0]['day']}, {data[0]['year']} - {data[-1]['month'].capitalize()} {data[-1]['day']}, {data[-1]['year']}"
+    
+    start_dt = f"{data[0]['month'].capitalize()} {data[0]['day']}, {data[0]['year']}"
+    end_dt = f"{data[-1]['month'].capitalize()} {data[-1]['day']}, {data[-1]['year']}"
+    desc = f"Last 7 Days Gold Rate Trend (per gram) • Kerala, India\nPeriod: {start_dt} - {end_dt}"
     h_draw.multiline_text((80, 128), desc, fill=(105, 115, 130, 255), font=font_sub, spacing=8)
 
-    # 2. Pre-bake Shadows
+    # 2. Pre-bake Individual Shadow Patches (Per Bar, No Ghost Shadows)
     individual_shadows = []
     for i in range(7):
         b = bases[i]
+        min_x = max(0, int(b[0] - 120))
+        max_x = min(W, int(b[0] + 120))
+        min_y = max(0, int(b[1] - 45))
+        max_y = min(H, int(b[1] + 45))
+
         sh_img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
         s_draw = ImageDraw.Draw(sh_img)
-        s_draw.polygon([tuple(p) for p in [b + u_left, b, b + v_right, b + u_left + v_right]], fill=(20, 35, 60, 90))
+        poly_base = [b + u_left, b, b + v_right, b + u_left + v_right]
+        s_draw.polygon([tuple(p) for p in poly_base], fill=(20, 35, 60, 90))
         s_draw.ellipse([b[0] - 90, b[1] - 16, b[0] + 90, b[1] + 18], fill=(30, 45, 75, 70))
-        min_x, max_x = max(0, int(b[0] - 120)), min(W, int(b[0] + 120))
-        min_y, max_y = max(0, int(b[1] - 45)), min(H, int(b[1] + 45))
-        individual_shadows.append((sh_img.crop((min_x, min_y, max_x, max_y)).filter(ImageFilter.GaussianBlur(radius=10)), (min_x, min_y)))
 
-    # 3. Pre-bake Dates
+        cropped_sh = sh_img.crop((min_x, min_y, max_x, max_y)).filter(ImageFilter.GaussianBlur(radius=10))
+        individual_shadows.append((cropped_sh, (min_x, min_y)))
+
+    # 3. Pre-bake 3D Perspective Date Cards
     precomputed_dates = []
     for i in range(7):
         b = bases[i]
         p_bl = b + 0.08 * v_right - np.array([0.0, 14.0])
         p_br = b + 0.92 * v_right - np.array([0.0, 14.0])
+        p_tl = p_bl - np.array([0.0, 140.0])
+        p_tr = p_br - np.array([0.0, 140.0])
+
         layer = precompute_date_overlay(
-            [p_bl - np.array([0.0, 140.0]), p_br - np.array([0.0, 140.0]), p_br, p_bl],
+            [p_tl, p_tr, p_br, p_bl],
             data[i]["day"], data[i]["month"], data[i]["year"],
             f_bar_day, f_bar_month, f_bar_year, W, H
         )
         precomputed_dates.append(layer)
 
-    # 4. Pre-bake Sprites & Reflections
-    BAR_DUR = 24
-    LINE_DUR = 14
+    # 4. Pre-bake Growth Steps & Individual Dynamic Reflections
+    BAR_DUR = 45
+    LINE_DUR = 25
+
     cached_bar_sprites = [[] for _ in range(7)]
     individual_reflections = []
 
     for i in range(7):
         b = bases[i]
         for step in range(BAR_DUR + 1):
-            h = max(0.0, data[i]["target_h"] * ease_out_back(step / float(BAR_DUR)))
-            p0, p1, p2, p3 = b, b + v_right, b + u_left + v_right, b + u_left
-            p4, p5, p6, p7 = p0 - np.array([0.0, h]), p1 - np.array([0.0, h]), p2 - np.array([0.0, h]), p3 - np.array([0.0, h])
+            t_bar = step / float(BAR_DUR)
+            h = max(0.0, data[i]["target_h"] * ease_out_back(t_bar))
+
+            p0 = b
+            p1 = b + v_right
+            p2 = b + u_left + v_right
+            p3 = b + u_left
+            p4 = p0 - np.array([0.0, h])
+            p5 = p1 - np.array([0.0, h])
+            p6 = p2 - np.array([0.0, h])
+            p7 = p3 - np.array([0.0, h])
+
             top_center = (p4 + p5 + p6 + p7) / 4.0
+
+            min_x = max(0, int(b[0] - 90))
+            max_x = min(W, int(b[0] + 95))
+            min_y = max(0, int(p6[1] - 5))
+            max_y = int(b[1] + 2)
 
             bar_img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
             draw_gradient_poly(bar_img, [p3, p0, p4, p7], col_left_light, col_left_dark)
@@ -248,6 +311,8 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
             b_draw = ImageDraw.Draw(bar_img)
             b_draw.line([tuple(p7), tuple(p4), tuple(p5)], fill=(130, 220, 255, 220), width=2)
             b_draw.line([tuple(p4), tuple(p0)], fill=(80, 185, 255, 160), width=2)
+            b_draw.line([tuple(p0), tuple(p1)], fill=(0, 75, 165, 120), width=1)
+            b_draw.line([tuple(p0), tuple(p3)], fill=(0, 60, 140, 120), width=1)
 
             if h >= 80.0:
                 d_alpha = clamp((h - 80.0) / 120.0)
@@ -259,97 +324,136 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                         txt_layer = Image.fromarray(arr, mode='RGBA')
                     bar_img.alpha_composite(txt_layer)
 
-            min_x, max_x = max(0, int(b[0] - 90)), min(W, int(b[0] + 95))
-            min_y, max_y = max(0, int(p6[1] - 5)), int(b[1] + 2)
-            cached_bar_sprites[i].append((bar_img.crop((min_x, min_y, max_x, max_y)), (min_x, min_y), top_center))
+            crop_patch = bar_img.crop((min_x, min_y, max_x, max_y))
+            cached_bar_sprites[i].append((crop_patch, (min_x, min_y), top_center))
 
         full_patch, (fx, fy), _ = cached_bar_sprites[i][-1]
-        temp_l = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-        temp_l.paste(full_patch, (fx, fy))
-        rx1, rx2, base_y = max(0, int(b[0] - 90)), min(W, int(b[0] + 95)), int(b[1])
-        flipped = temp_l.crop((rx1, base_y - 80, rx2, base_y)).transpose(Image.FLIP_TOP_BOTTOM)
-        fw, fh = flipped.size
-        fade = np.zeros((fh, fw), dtype=np.uint8)
-        for y_i in range(fh):
-            fade[y_i, :] = max(0, int(50 * (1.0 - (y_i / float(fh)) ** 0.55)))
+        base_y = int(b[1])
+        crop_h = 80
+        rx1 = max(0, int(b[0] - 90))
+        rx2 = min(W, int(b[0] + 95))
+
+        temp_layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        temp_layer.paste(full_patch, (fx, fy))
+
+        cropped_bar = temp_layer.crop((rx1, base_y - crop_h, rx2, base_y))
+        flipped = cropped_bar.transpose(Image.FLIP_TOP_BOTTOM)
+        f_w, f_h = flipped.size
+        fade = np.zeros((f_h, f_w), dtype=np.uint8)
+        for y_i in range(f_h):
+            fade[y_i, :] = max(0, int(50 * (1.0 - (y_i / float(f_h)) ** 0.55)))
         flipped.putalpha(Image.fromarray(fade, mode='L'))
-        individual_reflections.append((flipped.filter(ImageFilter.GaussianBlur(radius=2)), (rx1, base_y + 1)))
+        flipped = flipped.filter(ImageFilter.GaussianBlur(radius=2))
 
-    output_path = output_override or os.path.join(base_dir, "Videos", "sevenday_comparison.mp4")
+        individual_reflections.append((flipped, (rx1, base_y + 1)))
+
+    if output_override:
+        output_path = output_override
+    else:
+        out_dir = os.path.join(base_dir, "Videos")
+        os.makedirs(out_dir, exist_ok=True)
+        output_path = os.path.join(out_dir, "sevenday_comparison.mp4")
+
     ffmpeg_cmd = [
-        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-        '-s', f'{W}x{H}', '-pix_fmt', 'bgr24', '-r', str(FPS),
-        '-i', '-', '-c:v', 'libx264', '-preset', 'ultrafast',
-        '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', output_path
+        'ffmpeg',
+        '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-s', f'{W}x{H}',
+        '-pix_fmt', 'bgr24',
+        '-r', str(FPS),
+        '-i', '-',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'fastdecode',
+        '-crf', '19',
+        '-threads', '2',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        output_path
     ]
-    proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
-    # 5. Continuous Rendering Loop
+    try:
+        ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        print("[ERROR] FFmpeg is not found.")
+        return output_path
+
+    # Main Rendering Loop
     for frame in range(TOTAL_FRAMES):
         canvas = static_bg.copy()
 
-        # Shadows & Reflections
+        # 1. Dynamic Contact Shadows
         for i in range(7):
-            sf = 8 + i * 9
-            if frame >= sf:
-                p_bar = clamp((frame - sf) / float(BAR_DUR))
+            start_f = 15 + i * 18
+            if frame >= start_f:
+                p_bar = clamp((frame - start_f) / float(BAR_DUR))
+                sh_alpha = clamp(p_bar * 1.4)
+
                 sh_patch, sh_pos = individual_shadows[i]
-                if p_bar < 0.9:
+                if sh_alpha < 1.0:
                     arr = np.array(sh_patch)
-                    arr[:, :, 3] = np.uint8(arr[:, :, 3] * clamp(p_bar * 1.4))
+                    arr[:, :, 3] = np.uint8(arr[:, :, 3] * sh_alpha)
                     canvas.paste(Image.fromarray(arr, mode='RGBA'), sh_pos, Image.fromarray(arr, mode='RGBA'))
                 else:
                     canvas.paste(sh_patch, sh_pos, sh_patch)
 
-            if frame >= sf + 5:
-                p_refl = clamp((frame - (sf + 5)) / float(BAR_DUR - 5))
-                rf_patch, rf_pos = individual_reflections[i]
-                if p_refl < 0.95:
-                    arr = np.array(rf_patch)
+        # 2. Dynamic Reflections
+        for i in range(7):
+            start_f = 15 + i * 18
+            if frame >= start_f + 10:
+                p_refl = clamp((frame - (start_f + 10)) / float(BAR_DUR - 10))
+                refl_patch, refl_pos = individual_reflections[i]
+                if p_refl < 1.0:
+                    arr = np.array(refl_patch)
                     arr[:, :, 3] = np.uint8(arr[:, :, 3] * p_refl)
-                    canvas.paste(Image.fromarray(arr, mode='RGBA'), rf_pos, Image.fromarray(arr, mode='RGBA'))
+                    canvas.paste(Image.fromarray(arr, mode='RGBA'), refl_pos, Image.fromarray(arr, mode='RGBA'))
                 else:
-                    canvas.paste(rf_patch, rf_pos, rf_patch)
+                    canvas.paste(refl_patch, refl_pos, refl_patch)
 
-        # 3D Bars
+        # 3. 3D Bars (Back-to-Front Order: 7 -> 1)
         top_centers = [None] * 7
         for i in reversed(range(7)):
-            sf = 8 + i * 9
-            if frame >= sf:
-                step_idx = min(BAR_DUR, frame - sf)
+            start_f = 15 + i * 18
+            if frame >= start_f:
+                step_idx = min(BAR_DUR, frame - start_f)
                 patch, pos, tc = cached_bar_sprites[i][step_idx]
                 canvas.paste(patch, pos, patch)
                 top_centers[i] = tc
 
-        # Continuously Looping Flowing Light Node & Spline
-        if frame > 70:
-            trend_a = int(220 * clamp((frame - 70) / 20.0))
+        # 4. Connecting Glowing Spline & Continuous Looping Light Node
+        if frame > 140:
+            trend_alpha = int(220 * clamp((frame - 140) / 40.0))
             active_pts = [tc for tc in top_centers if tc is not None]
             if len(active_pts) >= 2:
-                tr_layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-                tr_draw = ImageDraw.Draw(tr_layer)
-                tr_draw.line([tuple(p) for p in active_pts], fill=(0, 180, 255, trend_a), width=3)
+                trend_layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+                tr_draw = ImageDraw.Draw(trend_layer)
 
-                # Continuous infinite loop across full audio duration
-                pulse_t = ((frame - 70) * 0.04) % 1.0
-                p_idx = int(pulse_t * (len(active_pts) - 1))
-                if p_idx < len(active_pts) - 1:
-                    sub_t = (pulse_t * (len(active_pts) - 1)) - p_idx
-                    pp = active_pts[p_idx] * (1.0 - sub_t) + active_pts[p_idx + 1] * sub_t
-                    tr_draw.ellipse([pp[0]-9, pp[1]-9, pp[0]+9, pp[1]+9], fill=(255, 255, 255, trend_a))
-                    tr_draw.ellipse([pp[0]-16, pp[1]-16, pp[0]+16, pp[1]+16], outline=(100, 220, 255, int(trend_a * 0.5)), width=2)
+                curve_pts = [tuple(p) for p in active_pts]
+                tr_draw.line(curve_pts, fill=(0, 180, 255, trend_alpha), width=3)
 
-                canvas.alpha_composite(tr_layer)
+                # Continuous modulo animation: never stops even if audio is 20+ seconds
+                pulse_t = ((frame - 140) * 0.04) % 1.0
+                pulse_idx = int(pulse_t * (len(active_pts) - 1))
+                if pulse_idx < len(active_pts) - 1:
+                    pA = active_pts[pulse_idx]
+                    pB = active_pts[pulse_idx + 1]
+                    sub_t = (pulse_t * (len(active_pts) - 1)) - pulse_idx
+                    pulse_pos = pA * (1.0 - sub_t) + pB * sub_t
+                    tr_draw.ellipse([pulse_pos[0]-8, pulse_pos[1]-8, pulse_pos[0]+8, pulse_pos[1]+8], fill=(255, 255, 255, trend_alpha))
+                    tr_draw.ellipse([pulse_pos[0]-14, pulse_pos[1]-14, pulse_pos[0]+14, pulse_pos[1]+14], outline=(120, 220, 255, int(trend_alpha * 0.5)), width=2)
 
-        # Dynamic Callout Lines & Counter
+                canvas.alpha_composite(trend_layer)
+
+        # 5. Progressive Callouts & Digital Price Ticker
         callout_draw = ImageDraw.Draw(canvas)
         for i in range(7):
             tc = top_centers[i]
             if tc is None:
                 continue
 
-            lsf = 8 + i * 9 + 12
-            p_line = clamp((frame - lsf) / float(LINE_DUR))
+            line_start_f = 15 + i * 18 + 25
+            p_line = clamp((frame - line_start_f) / float(LINE_DUR))
             if p_line <= 0:
                 continue
 
@@ -372,34 +476,39 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
             if p_line >= 0.6:
                 text_t = (p_line - 0.6) / 0.4
                 curr_val = int(10000 + (data[i]["price_int"] - 10000) * text_t)
+                price_str = f"₹{curr_val:,}"
+
                 txt_alpha = int(255 * text_t)
-                callout_draw.text((pt_end[0], pt_elbow[1] - 52), f"₹{curr_val:,}", fill=(0, 108, 235, txt_alpha), font=font_price)
+                callout_draw.text((pt_end[0], pt_elbow[1] - 52), price_str, fill=(0, 108, 235, txt_alpha), font=font_price)
+
                 c_color = color_down if data[i]["chg_type"] == "down" else (color_up if data[i]["chg_type"] == "up" else color_neu)
-                callout_draw.text((pt_end[0] + 4, pt_elbow[1] + 8), f"({data[i]['change']})", fill=(c_color[0], c_color[1], c_color[2], txt_alpha), font=font_change)
+                c_color_a = (c_color[0], c_color[1], c_color[2], txt_alpha)
+                callout_draw.text((pt_end[0] + 4, pt_elbow[1] + 8), f"({data[i]['change']})", fill=c_color_a, font=font_change)
 
-        # Continuous Pulsing Badges Throughout Video
-        if frame > 90:
-            badge_alpha = int(255 * clamp((frame - 90) / 15.0))
-            badge_pulse = math.sin((frame - 90) * 0.12) * 3.5
+        # 6. Week High / Low Badges with Continuous Breathing Pulse
+        if frame > 200:
+            badge_alpha = int(255 * clamp((frame - 200) / 30.0))
+            pulse = math.sin((frame - 200) * 0.12) * 3.5
 
-            for idx in [i for i in range(7) if data[i]["badge"] is not None]:
-                tc = top_centers[idx]
+            badge_indices = [idx for idx in range(7) if data[idx]["badge"] is not None]
+            for i in badge_indices:
+                tc = top_centers[i]
                 if tc is not None:
-                    badge_txt = data[idx]["badge"]
+                    badge_txt = data[i]["badge"]
                     b_color = (235, 140, 0, badge_alpha) if badge_txt == "WEEK HIGH" else (210, 45, 45, badge_alpha)
-                    bx = tc[0] - (120 if badge_txt == "WEEK LOW" else 130)
-                    by = tc[1] - 170 + badge_pulse
 
-                    halo_pad = 2.0 + math.sin((frame - 90) * 0.15) * 2.0
-                    callout_draw.rounded_rectangle([bx - halo_pad, by - halo_pad, bx + 115 + halo_pad, by + 28 + halo_pad], radius=8, fill=(b_color[0], b_color[1], b_color[2], int(badge_alpha * 0.35)))
+                    bx = tc[0] - 120 if badge_txt == "WEEK LOW" else tc[0] - 130
+                    by = tc[1] - 170 + pulse
                     callout_draw.rounded_rectangle([bx, by, bx + 115, by + 28], radius=6, fill=b_color)
                     callout_draw.text((bx + 8, by + 4), badge_txt, fill=(255, 255, 255, badge_alpha), font=font_badge)
 
-        frame_bgr = cv2.cvtColor(np.array(canvas.convert('RGB')), cv2.COLOR_RGB2BGR)
-        proc.stdin.write(frame_bgr.tobytes())
+        # Stream Frame to FFmpeg
+        frame_rgb = canvas.convert('RGB')
+        frame_bgr = cv2.cvtColor(np.array(frame_rgb), cv2.COLOR_RGB2BGR)
+        ffmpeg_proc.stdin.write(frame_bgr.tobytes())
 
-    proc.stdin.close()
-    proc.wait()
+    ffmpeg_proc.stdin.close()
+    ffmpeg_proc.wait()
     return output_path
 
 def main(duration_sec=None):
