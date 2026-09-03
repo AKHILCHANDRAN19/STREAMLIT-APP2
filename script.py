@@ -20,7 +20,7 @@ ENG_TO_ML_MONTHS = {
 }
 
 def translate_date(date_str):
-    """Converts English date strings (e.g., 'Sep 03') to Malayalam (e.g., 'സെപ്റ്റംബർ മൂന്ന്')."""
+    """Converts English date strings to Malayalam."""
     for eng, ml in ENG_TO_ML_MONTHS.items():
         if eng in date_str:
             day_match = re.search(r'\d+', date_str)
@@ -50,26 +50,23 @@ def generate_audio_script(source="akgsma"):
         
     yesterday_1g = gr_data.get('yest_1g', 0)
     
-    # Extract chronological 7-day history from GoodReturns
     history_items = gr_data.get("history", [])
-    if not history_items:
-        return "❌ Error: Could not retrieve market history."
+    if not history_items or len(history_items) < 8:
+        return "❌ Error: Could not retrieve enough market history."
         
-    # Reverse to get oldest to newest (last 7 days)
-    chronological_history = list(reversed(history_items[:7]))
+    # Strictly exclude today (index 0). Take the past 7 days (indices 1 to 7)
+    past_7_history = history_items[1:8]
+    chronological_history = list(reversed(past_7_history))
+    
     dates = [translate_date(item['date'].replace(" (Today)", "")) for item in chronological_history]
     weekly_prices = [item['1g'] for item in chronological_history]
     
-    # Ensure the latest array value exactly matches our chosen today's price
-    if weekly_prices:
-        weekly_prices[-1] = today_1g
-
     # 2. Daily Price Calculations (Pavan)
     pavan_price_today = today_1g * 8
     pavan_price_yesterday = yesterday_1g * 8
     pavan_change_amount = pavan_price_today - pavan_price_yesterday
 
-    # 3. Weekly Trend Calculations
+    # 3. Weekly Trend Calculations (Excluding Today)
     start_price = weekly_prices[0]
     end_price = weekly_prices[-1]
     weekly_price_difference = abs(start_price - end_price)
@@ -119,7 +116,7 @@ def generate_audio_script(source="akgsma"):
         summary_trend_word=summary_trend_word
     )
 
-    # 5. Construct Part 2: Today's Status
+    # 5. Construct Part 2: Today's Status (1 Gram first, then Pavan)
     if pavan_change_amount > 0:
         change_status = "വർദ്ധിച്ചു"
         part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
@@ -140,10 +137,10 @@ def generate_audio_script(source="akgsma"):
 
     # Combine into two distinct sections with beautiful emoji headers and dividers
     final_output = (
-        f"📊 വിപണി വിശകലനം (Market Comparison)\n"
+        f"📊 **വിപണി വിശകലനം (Market Comparison)**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{part1_script}\n\n"
-        f"🥇 ഇന്നത്തെ സ്വർണ്ണവില (Today's Price)\n"
+        f"🥇 **ഇന്നത്തെ സ്വർണ്ണവില (Today's Price)**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{part2_script}"
     )
@@ -155,14 +152,12 @@ def generate_audio_script(source="akgsma"):
 # ⚙️ COMMAND HANDLERS
 # ==========================================
 def get_script_akg():
-    """Triggered by /scriptakg"""
     return generate_audio_script(source="akgsma")
 
 def get_script_gd():
-    """Triggered by /scriptgd"""
     return generate_audio_script(source="goodreturns")
 
 if __name__ == "__main__":
-    # Test Output
     print("\n--- /scriptakg Output ---")
     print(get_script_akg())
+
