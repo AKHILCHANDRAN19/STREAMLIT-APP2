@@ -24,7 +24,7 @@ FONT_MALAYALAM = os.path.join(FONTS_DIR, "AnekMalayalam-ExtraBold.ttf")
 WIDTH, HEIGHT = 1920, 1080
 FPS = 30
 DURATION_SEC = 7.0
-TOTAL_FRAMES = int(FPS * DURATION_SEC)  # 210 frames
+DEFAULT_TOTAL_FRAMES = int(FPS * DURATION_SEC)  # 210 frames
 ANIM_FRAMES = 50  # 1.6s dynamic animation
 
 
@@ -34,12 +34,15 @@ ANIM_FRAMES = 50  # 1.6s dynamic animation
 def get_font(size, bold=False, malayalam=False):
     candidate_paths = [
         FONT_MALAYALAM,
+        os.path.join(FONTS_DIR, "AnekMalayalam-ExtraBold.ttf"),
         os.path.join(FONTS_DIR, "Roboto-Bold.ttf" if bold else "Roboto-Regular.ttf"),
         os.path.join(FONTS_DIR, "Montserrat-ExtraBold.ttf" if bold else "Montserrat-Bold.ttf"),
+        "AnekMalayalam-ExtraBold.ttf",
         "/system/fonts/Roboto-Bold.ttf" if bold else "/system/fonts/Roboto-Regular.ttf",
         "/system/fonts/NotoSans-Bold.ttf" if bold else "/system/fonts/NotoSans-Regular.ttf",
         "/system/fonts/DroidSans-Bold.ttf" if bold else "/system/fonts/DroidSans.ttf",
         "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
         "arialbd.ttf" if bold else "arial.ttf",
     ]
 
@@ -242,6 +245,7 @@ def draw_animated_pillar(
             curr_y -= 12
         canvas.alpha_composite(anno_layer)
 
+        # Number rides dynamically on the tip of the rising dotted line
         num_color = (*theme["icon_color"][:3], alpha)
         draw_text_safe(
             canvas,
@@ -413,7 +417,7 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g_str, price_8g_str):
 # ==========================================
 # MAIN PIPELINE
 # ==========================================
-def main(source="goodreturns", output_override=None):
+def main(source="goodreturns", duration_sec=None, output_override=None):
     start_time = time.time()
 
     print(f"\n[DATA] Fetching live data from {source}...")
@@ -427,6 +431,20 @@ def main(source="goodreturns", output_override=None):
         
     yest_1g = gr_data.get('yest_1g', 0)
     today_8g = today_1g * 8
+
+    # Dynamic Frame Count driven by Audio Duration
+    if duration_sec:
+        TOTAL_FRAMES = max(DEFAULT_TOTAL_FRAMES, int(FPS * duration_sec))
+    else:
+        TOTAL_FRAMES = DEFAULT_TOTAL_FRAMES
+
+    # Dynamic Height adjustment matching relative trends
+    if today_1g >= yest_1g:
+        yest_h = 470
+        today_h = 620
+    else:
+        yest_h = 620
+        today_h = 470
 
     # Pre-render Background Layer
     bg_np = linear_gradient_2d(
@@ -471,19 +489,11 @@ def main(source="goodreturns", output_override=None):
         "right_bot": (255, 95, 140, 195),
     }
 
-    # =========================================================================
-    # OPPOSING CONTRAST LOGIC
-    # If today > yesterday: Yesterday is RED (low), Today is TURQUOISE (high).
-    # If today < yesterday: Yesterday is TURQUOISE (high), Today is RED (low).
-    # =========================================================================
+    # Dynamic opposing contrast
     if today_1g >= yest_1g:
-        yest_h = 470
-        today_h = 620
         yest_theme = THEME_RED
         today_theme = THEME_TURQUOISE
     else:
-        yest_h = 620
-        today_h = 470
         yest_theme = THEME_TURQUOISE
         today_theme = THEME_RED
 
@@ -560,9 +570,11 @@ def main(source="goodreturns", output_override=None):
             "-preset",
             "ultrafast",
             "-crf",
-            "28",
+            "22",
             "-pix_fmt",
             "yuv420p",
+            "-movflags",
+            "+faststart",
             output_video_path,
         ]
         ffmpeg_proc = subprocess.Popen(
@@ -584,7 +596,7 @@ def main(source="goodreturns", output_override=None):
                 )
             )
 
-    print("\n🚀 [1/2] Rendering Sequential Staggered Growth Animation (50 frames)...")
+    print(f"\n🚀 Rendering Sequential Animation (Total {TOTAL_FRAMES} frames @ {FPS} FPS)...")
 
     # Phase 1: Sequential Ripple Motion
     for frame_idx in range(ANIM_FRAMES):
@@ -628,18 +640,7 @@ def main(source="goodreturns", output_override=None):
         )
         write_frame_bytes(frame_bgr.tobytes())
 
-        # Progress display
-        pct = int(((frame_idx + 1) / TOTAL_FRAMES) * 100)
-        filled = int(30 * (frame_idx + 1) / TOTAL_FRAMES)
-        bar = "█" * filled + "░" * (30 - filled)
-        sys.stdout.write(
-            f"\r⚡ Progress: [{bar}] {pct}% | Frame {frame_idx + 1}/{TOTAL_FRAMES}"
-        )
-        sys.stdout.flush()
-
-    print("\n🚀 [2/2] Streaming 160 Hold Frames (Instant Burst)...")
-
-    # Phase 2: Static Hold Frame
+    # Phase 2: Fully Extended Hold Frames (Covers full audio length without freezing or cutting)
     final_frame = base_bg.copy()
     for col in columns:
         draw_animated_pillar(
@@ -663,13 +664,6 @@ def main(source="goodreturns", output_override=None):
 
     for i in range(ANIM_FRAMES, TOTAL_FRAMES):
         write_frame_bytes(final_bytes)
-        pct = int(((i + 1) / TOTAL_FRAMES) * 100)
-        filled = int(30 * (i + 1) / TOTAL_FRAMES)
-        bar = "█" * filled + "░" * (30 - filled)
-        sys.stdout.write(
-            f"\r⚡ Progress: [{bar}] {pct}% | Frame {i + 1}/{TOTAL_FRAMES}"
-        )
-        sys.stdout.flush()
 
     if ffmpeg_proc:
         ffmpeg_proc.stdin.close()
@@ -684,4 +678,3 @@ def main(source="goodreturns", output_override=None):
 
 if __name__ == "__main__":
     main()
-
