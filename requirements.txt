@@ -6,3 +6,7 @@ numpy
 Pillow
 curl_cffi
 beautifulsoup4
+websockets
+requests
+google-genai
+indic-numtowords
