@@ -48,7 +48,6 @@ def scrape_goodreturns_22k():
         today_22k_1g = 0.0
         yest_22k_1g = 0.0
 
-        # Method A: Dedicated 22K Header
         header = soup.find(lambda tag: tag.name in ["h2", "h3"] and re.search(r"Today 22 Carat", tag.text, re.IGNORECASE))
         if header and header.find_next("table"):
             for row in header.find_next("table").find("tbody").find_all("tr"):
@@ -58,14 +57,13 @@ def scrape_goodreturns_22k():
                     yest_22k_1g = clean_price(cols[2].text)
                     break
 
-        # Method B: General Gold Price Summary Table Fallback
         if today_22k_1g == 0.0:
             gold_header = soup.find(lambda tag: tag.name in ["h2", "h3"] and re.search(r"Today Gold Price", tag.text, re.IGNORECASE))
             if gold_header and gold_header.find_next("table"):
                 for row in gold_header.find_next("table").find("tbody").find_all("tr"):
                     cols = row.find_all("td")
                     if len(cols) >= 4 and cols[0].text.strip() == "1":
-                        td_txt = cols[2].text  # 22 Carat column
+                        td_txt = cols[2].text
                         today_22k_1g = clean_price(td_txt)
                         change = 0.0
                         if "(" in td_txt and ")" in td_txt:
@@ -75,12 +73,12 @@ def scrape_goodreturns_22k():
                         yest_22k_1g = today_22k_1g - change
                         break
 
-        # --- History Table (Last 7 to 8 Days) ---
+        # --- History Table (Last 10 Days to allow math for the past 7 days) ---
         history = []
         for table in soup.find_all("table", class_="table-conatiner"):
             headers = [th.text.strip().lower() for th in table.find_all("th")]
             if "date" in headers:
-                for row in table.find("tbody").find_all("tr")[:8]:
+                for row in table.find("tbody").find_all("tr")[:10]:
                     cols = row.find_all("td")
                     if len(cols) >= 3:
                         date_str = cols[0].text.strip().split(",")[0]
@@ -113,7 +111,7 @@ def scrape_goodreturns_22k():
 def scrape_akgsma_22k():
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         }
         response = requests.get(AKGSMA_URL, headers=headers, impersonate="chrome120", timeout=15)
@@ -122,14 +120,12 @@ def scrape_akgsma_22k():
             soup = BeautifulSoup(response.text, "html.parser")
             p_22k_1g = 0
 
-            # Method A: List item scanning
             for li in soup.find_all("li"):
                 text = li.text.strip().upper()
                 if "22K" in text and "₹" in text:
                     p_22k_1g = int(re.sub(r"[^\d]", "", text.split("₹")[-1]))
                     break
 
-            # Method B: Regex on text content if needed
             if p_22k_1g == 0:
                 rate_list = soup.find("ul", class_=re.compile("list-block"))
                 if rate_list:
@@ -155,7 +151,6 @@ def scrape_akgsma_22k():
 # 💬 BOT TELEGRAM CARD FORMATTERS
 # ==========================================
 def get_akgsma_report() -> str:
-    """Formats output specifically for the /scrapeakg command."""
     now_ist = datetime.now(IST_TIMEZONE)
     today_date_str = now_ist.strftime("%d %B %Y (%A)")
     today_time_str = now_ist.strftime("%I:%M %p IST")
@@ -180,7 +175,6 @@ def get_akgsma_report() -> str:
 
 
 def get_goodreturns_report() -> str:
-    """Formats output specifically for the /scrapegd command."""
     now_ist = datetime.now(IST_TIMEZONE)
     today_date_str = now_ist.strftime("%d %B %Y (%A)")
     today_time_str = now_ist.strftime("%I:%M %p IST")
@@ -215,7 +209,7 @@ def get_goodreturns_report() -> str:
     lines.append(f"🔸 **Yesterday 1 Pavan   :** `{format_inr(gr_data['yest_8g'])}`")
     lines.append(f"📊 **Yesterday Difference:** {trend_str}")
     lines.append("\n──────────────────────────────")
-    lines.append("📈 **GOODRETURNS - 22K PRICE HISTORY (LAST 8 DAYS)**")
+    lines.append("📈 **GOODRETURNS - 22K PRICE HISTORY (LAST 10 DAYS)**")
     lines.append("──────────────────────────────")
     lines.append("```text")
     lines.append(f"{'#':<3} | {'DATE':<14} | {'1 GRAM RATE':<14} | {'1 PAVAN (8g)'}")
@@ -227,7 +221,7 @@ def get_goodreturns_report() -> str:
             label = f"{item['date']} (Today)" if idx == 1 else item['date']
             lines.append(f"{idx:<3} | {label:<14} | {format_inr(item['1g']):<14} | {format_inr(item['8g'])}")
     else:
-        for i in range(8):
+        for i in range(10):
             day_dt = now_ist - timedelta(days=i)
             d_str = day_dt.strftime("%b %d")
             rate = gr_data['today_1g'] if i == 0 else gr_data['yest_1g']
@@ -238,75 +232,11 @@ def get_goodreturns_report() -> str:
 
 
 # ==========================================
-# 🚀 CLI MAIN EXECUTION (Direct Terminal Run)
+# 🚀 CLI MAIN EXECUTION
 # ==========================================
 def main():
-    now_ist = datetime.now(IST_TIMEZONE)
-    today_date_str = now_ist.strftime("%d %B %Y (%A)")
-    today_time_str = now_ist.strftime("%I:%M %p IST")
-
-    print("\n" + "=" * 60)
-    print(f"📅 TODAY'S DATE : {today_date_str}")
-    print(f"🕒 CURRENT TIME : {today_time_str}")
-    print("=" * 60)
-    print("⏳ Fetching 22K Gold Data from GoodReturns...")
-    print("⏳ Fetching 22K Gold Data from AKGSMA...")
-
-    akg_data = scrape_akgsma_22k()
-    gr_data = scrape_goodreturns_22k()
-
-    print("\n" + "─" * 60)
-    print("🏛️  AKGSMA (KERALA) - TODAY'S 22K GOLD RATE")
-    print("─" * 60)
-    if "error" in akg_data:
-        print(f"❌ Error fetching AKGSMA: {akg_data['error']}")
-    else:
-        print(f"🔸 1 Gram  (22K / 916) : {format_inr(akg_data['today_1g'])}")
-        print(f"🔸 1 Pavan (8 Grams)   : {format_inr(akg_data['today_8g'])}")
-
-    print("\n" + "─" * 60)
-    print("🌐 GOODRETURNS - TODAY'S 22K GOLD RATE & DIFF")
-    print("─" * 60)
-    if "error" in gr_data:
-        print(f"❌ Error fetching GoodReturns: {gr_data['error']}")
-    else:
-        diff_1g = gr_data['diff_1g']
-        diff_8g = gr_data['diff_8g']
-
-        if diff_1g > 0:
-            trend_str = f"🔺 UP by {format_inr(abs(diff_1g))} per gram ({format_inr(abs(diff_8g))} per pavan)"
-        elif diff_1g < 0:
-            trend_str = f"🔻 DOWN by {format_inr(abs(diff_1g))} per gram ({format_inr(abs(diff_8g))} per pavan)"
-        else:
-            trend_str = "▬ NO CHANGE (Flat compared to yesterday)"
-
-        print(f"🔸 Today 1 Gram  (22K) : {format_inr(gr_data['today_1g'])}")
-        print(f"🔸 Today 1 Pavan (8g)  : {format_inr(gr_data['today_8g'])}")
-        print(f"🔸 Yesterday 1 Gram    : {format_inr(gr_data['yest_1g'])}")
-        print(f"🔸 Yesterday 1 Pavan   : {format_inr(gr_data['yest_8g'])}")
-        print(f"📊 Yesterday Difference: {trend_str}")
-
-        print("\n" + "─" * 60)
-        print("📈 GOODRETURNS - 22K GOLD PRICE HISTORY (LAST 8 DAYS)")
-        print("─" * 60)
-        print(f"{'#':<3} | {'DATE':<14} | {'1 GRAM RATE':<14} | {'1 PAVAN (8g) RATE'}")
-        print("─" * 60)
-
-        history_items = gr_data.get("history", [])
-        if history_items:
-            for idx, item in enumerate(history_items, 1):
-                label = f"{item['date']} (Today)" if idx == 1 else item['date']
-                print(f"{idx:<3} | {label:<14} | {format_inr(item['1g']):<14} | {format_inr(item['8g'])}")
-        else:
-            print("⚠️ Detailed table not parsed; displaying generated range:")
-            for i in range(8):
-                day_dt = now_ist - timedelta(days=i)
-                d_str = day_dt.strftime("%b %d")
-                rate = gr_data['today_1g'] if i == 0 else gr_data['yest_1g']
-                print(f"{i+1:<3} | {d_str:<14} | {format_inr(rate):<14} | {format_inr(rate * 8)}")
-
-    print("=" * 60 + "\n")
-
+    print(get_goodreturns_report())
 
 if __name__ == "__main__":
     main()
+
