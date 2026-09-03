@@ -9,12 +9,12 @@ from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Import your modules (ensure they have a main() or callable function)
+# Import your modules
 import intro
+import thumbnail
 # import Scrappping
 # import price_22k
 # import sevendayComparison
-# import thumbnail
 
 # ==========================================
 # 1. STREAMLIT UI & TELEMETRY
@@ -71,7 +71,48 @@ async def run_bot():
 
         @app.on_message(filters.command("start") & filters.private)
         async def handle_start(client: Client, message: Message):
-            await message.reply_text("👋 **Kerala Gold Desk Bot Online.**\n\nSend /generate to start the scraping and video rendering pipeline.")
+            await message.reply_text(
+                "👋 **Kerala Gold Desk Bot Online.**\n\n"
+                "Available Commands:\n"
+                "• `/generate` - Render full intro video\n"
+                "• `/genthumb` - Generate YouTube thumbnails"
+            )
+
+        @app.on_message(filters.command("genthumb") & filters.private)
+        async def handle_genthumb(client: Client, message: Message):
+            status_msg = await message.reply_text("🖼️ **Generating Thumbnails...**")
+            
+            try:
+                GLOBAL_STATE.set_status("Thumbnail", "Generating YouTube Thumbnails...")
+                thumbnail.main() 
+                
+                thumb1_path = os.path.join("Images", "thumbnail_1.png")
+                thumb2_path = os.path.join("Images", "thumbnail_2.png")
+                
+                # Upload Thumbnail 1
+                if os.path.exists(thumb1_path):
+                    await client.send_photo(
+                        chat_id=message.chat.id,
+                        photo=thumb1_path,
+                        caption="🥇 **Thumbnail 1: ഇന്നത്തെ സ്വർണ്ണവില കേരളം**"
+                    )
+                
+                # Upload Thumbnail 2
+                if os.path.exists(thumb2_path):
+                    await client.send_photo(
+                        chat_id=message.chat.id,
+                        photo=thumb2_path,
+                        caption="🥇 **Thumbnail 2: ഇന്നത്തെ രണ്ടാം സ്വർണ്ണവില കേരളം**"
+                    )
+                
+                await status_msg.delete()
+                GLOBAL_STATE.set_status("Idle", "Thumbnails generated successfully.")
+                GLOBAL_STATE.log("Thumbnails successfully uploaded to Telegram.")
+
+            except Exception as e:
+                GLOBAL_STATE.log(f"Thumbnail Error: {e}")
+                await status_msg.edit_text(f"❌ **Error generating thumbnails:** {e}")
+                GLOBAL_STATE.set_status("Error", str(e))
 
         @app.on_message(filters.command("generate") & filters.private)
         async def handle_generate(client: Client, message: Message):
@@ -91,11 +132,8 @@ async def run_bot():
                 # STEP 3: Render Daily Price & 7-Day Comparison
                 # price_22k.main()
                 # sevendayComparison.main()
-                
-                # STEP 4: Render Thumbnail
-                # thumbnail.main()
 
-                # STEP 5: FFmpeg Concatenation
+                # STEP 4: FFmpeg Concatenation
                 GLOBAL_STATE.set_status("Merging", "Stitching video chunks via FFmpeg...")
                 await status_msg.edit_text("🗜️ **Stitching final video...**")
                 
@@ -113,16 +151,14 @@ async def run_bot():
                 ]
                 subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                # STEP 6: Upload to Telegram
+                # STEP 5: Upload to Telegram
                 GLOBAL_STATE.set_status("Uploading", "Sending final video to Telegram...")
                 await status_msg.edit_text("⬆️ **Uploading final video to chat...**")
                 
-                # thumb_path = os.path.join("Images", "thumbnail.jpg")
                 await client.send_video(
                     chat_id=message.chat.id,
                     video=final_output,
                     caption="🥇 **ഇന്നത്തെ സ്വർണ്ണവില**\nHere is your generated video.",
-                    # thumb=thumb_path
                 )
                 
                 await status_msg.delete()
