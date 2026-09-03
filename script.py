@@ -30,6 +30,7 @@ def translate_date(date_str):
             return date_str.replace(eng, ml)
     return date_str
 
+
 # ==========================================
 # 📝 MAIN SCRIPT GENERATOR
 # ==========================================
@@ -105,7 +106,8 @@ def generate_audio_script(source="akgsma"):
         time_of_day = "വൈകുന്നേരം"
 
     # 4. Construct Part 1: Seven-Day Comparison
-    part1_template = "നമസ്കാരം. ഇന്നത്തെ സ്വർണ്ണവില വിവരങ്ങളിലേക്ക് സ്വാഗതം. ഇന്നലെ സ്വർണ്ണ വിപണി അവസാനമായി ട്രേഡ് ചെയ്തത് ഗ്രാമിന് {yesterday_price} രൂപ എന്ന നിരക്കിലാണ്. കഴിഞ്ഞ ഒരാഴ്ചത്തെ കണക്കുകൾ പരിശോധിക്കുമ്പോൾ വിപണിയിൽ {weekly_trend_phrase}. ഈ ആഴ്ചയിലെ വിപണി വിലയിരുത്തുമ്പോൾ, സ്വർണ്ണം ഏറ്റവും ഉയരത്തിൽ എത്തിയത് {week_high_date}-ൽ ഗ്രാമിന് {week_high_price} രൂപ എന്ന നിരക്കിലാണ്. എന്നാൽ വിപണി ഏറ്റവും താഴെത്തട്ടിൽ എത്തിയത് {week_low_date}-ൽ ഗ്രാമിന് {week_low_price} രൂപയിലുമാണ്. ചുരുക്കത്തിൽ, കഴിഞ്ഞ ഒരാഴ്ചക്കിടെ ഒരു ഗ്രാം 22 കാരറ്റ് സ്വർണ്ണത്തിന് {price_difference} രൂപയുടെ {summary_trend_word} കേരള വിപണിയിൽ ഉണ്ടായിട്ടുള്ളത്."
+    # Replaced '22' with 'ഇരുപത്തി രണ്ട്'
+    part1_template = "നമസ്കാരം. ഇന്നത്തെ സ്വർണ്ണവില വിവരങ്ങളിലേക്ക് സ്വാഗതം. ഇന്നലെ സ്വർണ്ണ വിപണി അവസാനമായി ട്രേഡ് ചെയ്തത് ഗ്രാമിന് {yesterday_price} രൂപ എന്ന നിരക്കിലാണ്. കഴിഞ്ഞ ഒരാഴ്ചത്തെ കണക്കുകൾ പരിശോധിക്കുമ്പോൾ വിപണിയിൽ {weekly_trend_phrase}. ഈ ആഴ്ചയിലെ വിപണി വിലയിരുത്തുമ്പോൾ, സ്വർണ്ണം ഏറ്റവും ഉയരത്തിൽ എത്തിയത് {week_high_date}-ൽ ഗ്രാമിന് {week_high_price} രൂപ എന്ന നിരക്കിലാണ്. എന്നാൽ വിപണി ഏറ്റവും താഴെത്തട്ടിൽ എത്തിയത് {week_low_date}-ൽ ഗ്രാമിന് {week_low_price} രൂപയിലുമാണ്. ചുരുക്കത്തിൽ, കഴിഞ്ഞ ഒരാഴ്ചക്കിടെ ഒരു ഗ്രാം ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണത്തിന് {price_difference} രൂപയുടെ {summary_trend_word} കേരള വിപണിയിൽ ഉണ്ടായിട്ടുള്ളത്."
     
     part1_script = part1_template.format(
         yesterday_price=to_ml_words(yesterday_1g),
@@ -119,15 +121,16 @@ def generate_audio_script(source="akgsma"):
     )
 
     # 5. Construct Part 2: Today's Status
+    # Replaced '22' with 'ഇരുപത്തി രണ്ട്' and reordered to state 1 gram first, then 1 pavan
     if pavan_change_amount > 0:
         change_status = "വർദ്ധിച്ചു"
-        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത 22 കാരറ്റ് സ്വർണ്ണം ഒരു പവന് {pavan_price} രൂപയും, ഒരു ഗ്രാമിന് {gram_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
     elif pavan_change_amount < 0:
         change_status = "കുറഞ്ഞു"
-        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത 22 കാരറ്റ് സ്വർണ്ണം ഒരു പവന് {pavan_price} രൂപയും, ഒരു ഗ്രാമിന് {gram_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
     else:
         change_status = ""
-        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവിലയിൽ മാറ്റമില്ല. നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത 22 കാരറ്റ് സ്വർണ്ണം ഒരു പവന് {pavan_price} രൂപയും, ഒരു ഗ്രാമിന് {gram_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
+        part2_template = "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവിലയിൽ മാറ്റമില്ല. നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
 
     part2_script = part2_template.format(
         time_of_day=time_of_day,
@@ -137,11 +140,12 @@ def generate_audio_script(source="akgsma"):
         gram_price=to_ml_words(today_1g)
     )
 
-    # Combine and return
-    return f"{part1_script} {part2_script}"
+    # Combine into two distinct sections
+    return f"**വിപണി വിശകലനം (Comparison)**\n{part1_script}\n\n**ഇന്നത്തെ വില (Today Price)**\n{part2_script}"
+
 
 # ==========================================
-# ⚙️ COMMAND HANDLERS (To integrate into app.py)
+# ⚙️ COMMAND HANDLERS
 # ==========================================
 def get_script_akg():
     """Triggered by /scriptakg"""
@@ -151,16 +155,7 @@ def get_script_gd():
     """Triggered by /scriptgd"""
     return generate_audio_script(source="goodreturns")
 
-def get_automated_daily_script():
-    """Automatically routes based on user's saved weekday/weekend preference."""
-    today = datetime.datetime.now()
-    if today.weekday() == 6: # Sunday
-        return generate_audio_script(source="goodreturns")
-    else: # Weekdays
-        return generate_audio_script(source="akgsma")
-
 if __name__ == "__main__":
     # Test Output
     print("\n--- /scriptakg Output ---")
     print(get_script_akg())
-
