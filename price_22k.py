@@ -461,38 +461,55 @@ def main(source="goodreturns", output_override=None):
     rx, ry, cy_base = 92, 46, 920
 
     # =========================================================================
-    # EXACT COLORS FROM YOUR SOURCE CODE (Turquoise Bar 1 & Glassy Red Bar 2)
-    # =========================================================================
+    # EXACT TWO COLOR PALETTES FROM YOUR SCRIPT
+    # ==========================================
+    # Palette 1: Turquoise / Cyan (The "other" color from Bar 1)
+    THEME_TURQUOISE = {
+        "icon_color": (0, 170, 155, 255),
+        "top_light": (0, 255, 210, 255),
+        "top_dark": (0, 185, 165, 255),
+        "left_top": (0, 200, 185, 245),
+        "left_bot": (175, 255, 230, 165),
+        "right_top": (0, 145, 135, 255),
+        "right_bot": (130, 245, 210, 185),
+    }
+
+    # Palette 2: Glassy Pink / Red (The red color from Bar 2)
+    THEME_RED = {
+        "icon_color": (230, 25, 90, 255),
+        "top_light": (255, 75, 125, 255),
+        "top_dark": (200, 10, 80, 255),
+        "left_top": (205, 15, 85, 245),
+        "left_bot": (255, 130, 165, 175),
+        "right_top": (160, 5, 65, 255),
+        "right_bot": (255, 95, 140, 195),
+    }
+
+    # Rule: If today's price is less than yesterday -> RED.
+    #       If today's price is greater than yesterday -> THE OTHER COLOR (Turquoise).
+    if today_1g < yest_1g:
+        today_bar_theme = THEME_RED
+    else:
+        today_bar_theme = THEME_TURQUOISE
+
     columns = [
-        # Bar 1: Yesterday's Bar (Turquoise / Cyan)
+        # Bar 1: Yesterday's Bar (Always Turquoise)
         {
             "cx": 360,
             "target_h": yest_h,
             "top_num": f"₹{int(yest_1g)}",
             "date_text": date_yesterday,
             "stagger_start": 0,
-            "icon_color": (0, 170, 155, 255),
-            "top_light": (0, 255, 210, 255),
-            "top_dark": (0, 185, 165, 255),
-            "left_top": (0, 200, 185, 245),
-            "left_bot": (175, 255, 230, 165),
-            "right_top": (0, 145, 135, 255),
-            "right_bot": (130, 245, 210, 185),
+            **THEME_TURQUOISE
         },
-        # Bar 2: Today's Bar (Original Glassy Pink / Red)
+        # Bar 2: Today's Bar (Red if dropped, Turquoise if increased)
         {
             "cx": 780,
             "target_h": today_h,
             "top_num": f"₹{int(today_1g)}",
             "date_text": date_today,
             "stagger_start": 10,
-            "icon_color": (230, 25, 90, 255),
-            "top_light": (255, 75, 125, 255),
-            "top_dark": (200, 10, 80, 255),
-            "left_top": (205, 15, 85, 245),
-            "left_bot": (255, 130, 165, 175),
-            "right_top": (160, 5, 65, 255),
-            "right_bot": (255, 95, 140, 195),
+            **today_bar_theme
         },
     ]
 
