@@ -84,6 +84,7 @@ def draw_text_safe(
             )
             draw.text(pos, text, fill=color, font=font, anchor=anchor)
     else:
+        # Fallback Vector Text
         img_np = np.array(draw_img)
         font_face = cv2.FONT_HERSHEY_DUPLEX if bold else cv2.FONT_HERSHEY_SIMPLEX
         scale = size / 30.0
@@ -219,7 +220,7 @@ def draw_animated_pillar(
     e_draw.line([b_lft, b_bot, b_rgt], fill=(255, 255, 255, 120), width=1)
     canvas.alpha_composite(edge_layer)
 
-    # 5. Dotted Line & Floating Numbers
+    # 5. Dotted Line & Floating Numbers Growing with Animation
     if local_progress > 0.05:
         line_growth = min(1.0, local_progress / 0.85)
         dash_len = int(75 * line_growth)
@@ -240,6 +241,7 @@ def draw_animated_pillar(
             curr_y -= 12
         canvas.alpha_composite(anno_layer)
 
+        # Number rides dynamically on the tip of the rising dotted line
         num_color = (*theme["icon_color"][:3], alpha)
         draw_text_safe(
             canvas,
@@ -255,7 +257,7 @@ def draw_animated_pillar(
 # ==========================================
 # PRE-RENDER MALAYALAM GOLD PRICE BOX
 # ==========================================
-def pre_render_gold_card_with_glow(box_w, box_h, price_1g, price_8g):
+def pre_render_gold_card_with_glow(box_w, box_h, price_1g_str, price_8g_str):
     padding = 40
     total_w = box_w + padding * 2
     total_h = box_h + padding * 2
@@ -296,6 +298,7 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g, price_8g):
         width=2,
     )
 
+    # Title: "ഇന്നത്തെ സ്വർണ്ണവില"
     draw_text_safe(
         full_card,
         "ഇന്നത്തെ സ്വർണ്ണവില",
@@ -349,7 +352,7 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g, price_8g):
     )
     draw_text_safe(
         full_card,
-        f"₹ {price_1g:,} /-",
+        price_1g_str,
         (bx + box_w - 65, row1_y + 16),
         size=36,
         color=(0, 160, 145, 255),
@@ -379,7 +382,7 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g, price_8g):
     )
     draw_text_safe(
         full_card,
-        f"₹ {price_8g:,} /-",
+        price_8g_str,
         (bx + box_w - 65, row2_y + 16),
         size=36,
         color=(235, 25, 95, 255),
@@ -424,7 +427,8 @@ def main(source="goodreturns", output_override=None):
         
     yest_1g = gr_data.get('yest_1g', 0)
     today_8g = today_1g * 8
-    
+
+    # Calculate Relative Bar Heights
     if today_1g > yest_1g:
         yest_h = 470
         today_h = 620
@@ -435,6 +439,7 @@ def main(source="goodreturns", output_override=None):
         yest_h = 550
         today_h = 550
 
+    # Pre-render Background Layer
     bg_np = linear_gradient_2d(
         WIDTH, HEIGHT, (244, 248, 252, 255), (232, 240, 248, 255)
     )
@@ -454,55 +459,68 @@ def main(source="goodreturns", output_override=None):
 
     rx, ry, cy_base = 92, 46, 920
 
-    # Dynamic color themes based on market change
-    if today_1g >= yest_1g:
-        # Glassy Green Theme
-        today_colors = {
-            "icon_color": (30, 200, 90, 255),
-            "top_light": (80, 255, 140, 255),
-            "top_dark": (10, 190, 80, 255),
-            "left_top": (20, 210, 95, 245),
-            "left_bot": (140, 255, 180, 175),
-            "right_top": (5, 160, 60, 255),
-            "right_bot": (100, 230, 150, 195),
-        }
+    # ==========================================
+    # COLOR THEME DEFINITIONS
+    # ==========================================
+    THEME_RED = {
+        "icon_color": (230, 25, 90, 255),
+        "top_light": (255, 75, 125, 255),
+        "top_dark": (200, 10, 80, 255),
+        "left_top": (205, 15, 85, 245),
+        "left_bot": (255, 130, 165, 175),
+        "right_top": (160, 5, 65, 255),
+        "right_bot": (255, 95, 140, 195),
+    }
+
+    THEME_GREEN = {
+        "icon_color": (30, 225, 110, 255),
+        "top_light": (90, 255, 150, 255),
+        "top_dark": (15, 205, 95, 255),
+        "left_top": (25, 215, 100, 245),
+        "left_bot": (145, 255, 180, 175),
+        "right_top": (10, 170, 75, 255),
+        "right_bot": (105, 255, 150, 195),
+    }
+
+    THEME_YESTERDAY = {
+        "icon_color": (0, 170, 155, 255),
+        "top_light": (0, 255, 210, 255),
+        "top_dark": (0, 185, 165, 255),
+        "left_top": (0, 200, 185, 245),
+        "left_bot": (175, 255, 230, 165),
+        "right_top": (0, 145, 135, 255),
+        "right_bot": (130, 245, 210, 185),
+    }
+
+    # Apply Color Themes Based on Price Increase/Decrease
+    # Green if price goes UP, Red/Pink if price goes DOWN.
+    if today_1g > yest_1g:
+        active_today_theme = THEME_GREEN
     else:
-        # Glassy Red/Pink Theme
-        today_colors = {
-            "icon_color": (230, 25, 90, 255),
-            "top_light": (255, 75, 125, 255),
-            "top_dark": (200, 10, 80, 255),
-            "left_top": (205, 15, 85, 245),
-            "left_bot": (255, 130, 165, 175),
-            "right_top": (160, 5, 65, 255),
-            "right_bot": (255, 95, 140, 195),
-        }
+        active_today_theme = THEME_RED
 
     columns = [
+        # Bar 1: Yesterday's Bar (Turquoise)
         {
             "cx": 360,
             "target_h": yest_h,
-            "top_num": f"₹{int(yest_1g)}",
+            "top_num": f"₹{int(yest_1g):,}",
             "date_text": date_yesterday,
             "stagger_start": 0,
-            "icon_color": (0, 170, 155, 255),
-            "top_light": (0, 255, 210, 255),
-            "top_dark": (0, 185, 165, 255),
-            "left_top": (0, 200, 185, 245),
-            "left_bot": (175, 255, 230, 165),
-            "right_top": (0, 145, 135, 255),
-            "right_bot": (130, 245, 210, 185),
+            **THEME_YESTERDAY
         },
+        # Bar 2: Today's Bar (Red or Green)
         {
             "cx": 780,
             "target_h": today_h,
-            "top_num": f"₹{int(today_1g)}",
+            "top_num": f"₹{int(today_1g):,}",
             "date_text": date_today,
             "stagger_start": 10,
-            **today_colors
+            **active_today_theme
         },
     ]
 
+    # Render dynamic dates on the left of each bar
     for col in columns:
         draw_text_safe(
             base_bg,
@@ -516,41 +534,75 @@ def main(source="goodreturns", output_override=None):
             line_spacing=6,
         )
 
+    # Pre-render Right Gold Card with Formatting
     box_w, box_h = 740, 520
     target_box_x, target_box_y = 1080, 280
+    price_1g_str = f"₹ {int(today_1g):,} /-"
+    price_8g_str = f"₹ {int(today_8g):,} /-"
+
     cached_box_with_glow, pad = pre_render_gold_card_with_glow(
-        box_w, box_h, int(today_1g), int(today_8g)
+        box_w, box_h, price_1g_str, price_8g_str
     )
 
     output_video_path = output_override or os.path.join(VIDEOS_DIR, "price_22k.mp4")
 
+    # Encode with FFmpeg pipe (or cv2 fallback)
     has_ffmpeg = shutil.which("ffmpeg") is not None
     ffmpeg_proc = None
     cv_writer = None
 
     if has_ffmpeg:
         cmd = [
-            "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
-            "-s", f"{WIDTH}x{HEIGHT}", "-pix_fmt", "bgr24", "-r", str(FPS),
-            "-i", "-", "-c:v", "libx264", "-preset", "ultrafast",
-            "-crf", "28", "-pix_fmt", "yuv420p", output_video_path,
+            "ffmpeg",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-vcodec",
+            "rawvideo",
+            "-s",
+            f"{WIDTH}x{HEIGHT}",
+            "-pix_fmt",
+            "bgr24",
+            "-r",
+            str(FPS),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "28",
+            "-pix_fmt",
+            "yuv420p",
+            output_video_path,
         ]
-        ffmpeg_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        ffmpeg_proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
     else:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        cv_writer = cv2.VideoWriter(output_video_path, fourcc, FPS, (WIDTH, HEIGHT))
+        cv_writer = cv2.VideoWriter(
+            output_video_path, fourcc, FPS, (WIDTH, HEIGHT)
+        )
 
     def write_frame_bytes(bgr_bytes):
         if ffmpeg_proc:
             ffmpeg_proc.stdin.write(bgr_bytes)
         else:
-            cv_writer.write(np.frombuffer(bgr_bytes, dtype=np.uint8).reshape((HEIGHT, WIDTH, 3)))
+            cv_writer.write(
+                np.frombuffer(bgr_bytes, dtype=np.uint8).reshape(
+                    (HEIGHT, WIDTH, 3)
+                )
+            )
 
     print("\n🚀 [1/2] Rendering Sequential Staggered Growth Animation (50 frames)...")
 
+    # Phase 1: Sequential Ripple Motion
     for frame_idx in range(ANIM_FRAMES):
         frame = base_bg.copy()
 
+        # Render Left Pillars with Sequential Stagger
         for col in columns:
             local_frame = frame_idx - col["stagger_start"]
             if local_frame < 0:
@@ -561,32 +613,64 @@ def main(source="goodreturns", output_override=None):
             bar_ease = ease_out_back(t_bar, overshoot=1.35)
             current_h = int(col["target_h"] * bar_ease)
 
-            draw_animated_pillar(frame, col["cx"], cy_base, rx, ry, current_h, col, t_bar)
+            draw_animated_pillar(
+                frame,
+                col["cx"],
+                cy_base,
+                rx,
+                ry,
+                current_h,
+                col,
+                t_bar,
+            )
 
+        # Right Gold Card Drops simultaneously with Elastic Bounce
         t_box = min(1.0, frame_idx / 35.0)
         box_ease = ease_out_back(t_box, overshoot=1.45)
         current_box_y = int(-box_h + (target_box_y + box_h) * box_ease)
 
         if current_box_y + box_h > 0:
-            frame.alpha_composite(cached_box_with_glow, (target_box_x - pad, current_box_y - pad))
+            frame.alpha_composite(
+                cached_box_with_glow,
+                (target_box_x - pad, current_box_y - pad),
+            )
 
-        frame_bgr = cv2.cvtColor(np.array(frame.convert("RGB")), cv2.COLOR_RGB2BGR)
+        frame_bgr = cv2.cvtColor(
+            np.array(frame.convert("RGB")), cv2.COLOR_RGB2BGR
+        )
         write_frame_bytes(frame_bgr.tobytes())
 
+        # Progress display
         pct = int(((frame_idx + 1) / TOTAL_FRAMES) * 100)
         filled = int(30 * (frame_idx + 1) / TOTAL_FRAMES)
         bar = "█" * filled + "░" * (30 - filled)
-        sys.stdout.write(f"\r⚡ Progress: [{bar}] {pct}% | Frame {frame_idx + 1}/{TOTAL_FRAMES}")
+        sys.stdout.write(
+            f"\r⚡ Progress: [{bar}] {pct}% | Frame {frame_idx + 1}/{TOTAL_FRAMES}"
+        )
         sys.stdout.flush()
 
     print("\n🚀 [2/2] Streaming 160 Hold Frames (Instant Burst)...")
 
+    # Phase 2: Static Hold Frame
     final_frame = base_bg.copy()
     for col in columns:
-        draw_animated_pillar(final_frame, col["cx"], cy_base, rx, ry, col["target_h"], col, 1.0)
-    final_frame.alpha_composite(cached_box_with_glow, (target_box_x - pad, target_box_y - pad))
-    
-    final_bgr = cv2.cvtColor(np.array(final_frame.convert("RGB")), cv2.COLOR_RGB2BGR)
+        draw_animated_pillar(
+            final_frame,
+            col["cx"],
+            cy_base,
+            rx,
+            ry,
+            col["target_h"],
+            col,
+            1.0,
+        )
+    final_frame.alpha_composite(
+        cached_box_with_glow,
+        (target_box_x - pad, target_box_y - pad),
+    )
+    final_bgr = cv2.cvtColor(
+        np.array(final_frame.convert("RGB")), cv2.COLOR_RGB2BGR
+    )
     final_bytes = final_bgr.tobytes()
 
     for i in range(ANIM_FRAMES, TOTAL_FRAMES):
@@ -594,7 +678,9 @@ def main(source="goodreturns", output_override=None):
         pct = int(((i + 1) / TOTAL_FRAMES) * 100)
         filled = int(30 * (i + 1) / TOTAL_FRAMES)
         bar = "█" * filled + "░" * (30 - filled)
-        sys.stdout.write(f"\r⚡ Progress: [{bar}] {pct}% | Frame {i + 1}/{TOTAL_FRAMES}")
+        sys.stdout.write(
+            f"\r⚡ Progress: [{bar}] {pct}% | Frame {i + 1}/{TOTAL_FRAMES}"
+        )
         sys.stdout.flush()
 
     if ffmpeg_proc:
