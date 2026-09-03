@@ -84,7 +84,6 @@ def draw_text_safe(
             )
             draw.text(pos, text, fill=color, font=font, anchor=anchor)
     else:
-        # Fallback Vector Text
         img_np = np.array(draw_img)
         font_face = cv2.FONT_HERSHEY_DUPLEX if bold else cv2.FONT_HERSHEY_SIMPLEX
         scale = size / 30.0
@@ -220,7 +219,7 @@ def draw_animated_pillar(
     e_draw.line([b_lft, b_bot, b_rgt], fill=(255, 255, 255, 120), width=1)
     canvas.alpha_composite(edge_layer)
 
-    # 5. Dotted Line & Floating Numbers Growing with Animation
+    # 5. Dotted Line & Floating Numbers
     if local_progress > 0.05:
         line_growth = min(1.0, local_progress / 0.85)
         dash_len = int(75 * line_growth)
@@ -297,7 +296,6 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g, price_8g):
         width=2,
     )
 
-    # Title: "ഇന്നത്തെ സ്വർണ്ണവില"
     draw_text_safe(
         full_card,
         "ഇന്നത്തെ സ്വർണ്ണവില",
@@ -415,7 +413,6 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g, price_8g):
 def main(source="goodreturns", output_override=None):
     start_time = time.time()
 
-    # Fetch Real Data
     print(f"\n[DATA] Fetching live data from {source}...")
     gr_data = scrapping.scrape_goodreturns_22k()
     
@@ -428,7 +425,6 @@ def main(source="goodreturns", output_override=None):
     yest_1g = gr_data.get('yest_1g', 0)
     today_8g = today_1g * 8
     
-    # Calculate relative bar heights visually
     if today_1g > yest_1g:
         yest_h = 470
         today_h = 620
@@ -439,7 +435,6 @@ def main(source="goodreturns", output_override=None):
         yest_h = 550
         today_h = 550
 
-    # Pre-render Background Layer
     bg_np = linear_gradient_2d(
         WIDTH, HEIGHT, (244, 248, 252, 255), (232, 240, 248, 255)
     )
@@ -458,6 +453,30 @@ def main(source="goodreturns", output_override=None):
     date_today = format_date_text(today_dt)
 
     rx, ry, cy_base = 92, 46, 920
+
+    # Dynamic color themes based on market change
+    if today_1g >= yest_1g:
+        # Glassy Green Theme
+        today_colors = {
+            "icon_color": (30, 200, 90, 255),
+            "top_light": (80, 255, 140, 255),
+            "top_dark": (10, 190, 80, 255),
+            "left_top": (20, 210, 95, 245),
+            "left_bot": (140, 255, 180, 175),
+            "right_top": (5, 160, 60, 255),
+            "right_bot": (100, 230, 150, 195),
+        }
+    else:
+        # Glassy Red/Pink Theme
+        today_colors = {
+            "icon_color": (230, 25, 90, 255),
+            "top_light": (255, 75, 125, 255),
+            "top_dark": (200, 10, 80, 255),
+            "left_top": (205, 15, 85, 245),
+            "left_bot": (255, 130, 165, 175),
+            "right_top": (160, 5, 65, 255),
+            "right_bot": (255, 95, 140, 195),
+        }
 
     columns = [
         {
@@ -480,13 +499,7 @@ def main(source="goodreturns", output_override=None):
             "top_num": f"₹{int(today_1g)}",
             "date_text": date_today,
             "stagger_start": 10,
-            "icon_color": (230, 25, 90, 255),
-            "top_light": (255, 75, 125, 255),
-            "top_dark": (200, 10, 80, 255),
-            "left_top": (205, 15, 85, 245),
-            "left_bot": (255, 130, 165, 175),
-            "right_top": (160, 5, 65, 255),
-            "right_bot": (255, 95, 140, 195),
+            **today_colors
         },
     ]
 
@@ -503,7 +516,6 @@ def main(source="goodreturns", output_override=None):
             line_spacing=6,
         )
 
-    # Generate the Card with real numbers
     box_w, box_h = 740, 520
     target_box_x, target_box_y = 1080, 280
     cached_box_with_glow, pad = pre_render_gold_card_with_glow(
