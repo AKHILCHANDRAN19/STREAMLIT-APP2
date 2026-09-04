@@ -58,7 +58,7 @@ def get_youtube_titles(dt=None):
         dt = get_current_ist_date()
     date_str = dt.strftime("%d-%m-%Y")
 
-    title_1 = f"ഇന്നത്തെ സ്വർണ്ണവില | {date_str}|gold rate kerala today|gold rate today|#keralahold desk"
+    title_1 = f"ഇന്നത്തെ സ്വർണ്ണവില | {date_str}|gold rate kerala today|gold rate today|#keralagolddesk"
     title_2 = f"ഇന്നത്തെ സ്വർണ്ണവില {date_str} | Kerala gold rate today | Gold rate Malayalam | Swarna vila"
 
     # Using single backticks for 1-tap copy without language-tag conflicts
