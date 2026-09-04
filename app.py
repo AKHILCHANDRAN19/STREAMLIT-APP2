@@ -243,20 +243,25 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, comp_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_comp, caption=f"📈 **7-Day Price Comparison** ({dur_comp:.1f}s)")
 
-        # STEP 5: 22K PRICE CHART
+        # STEP 5: 22K PRICE CHART (Full-Duration Dynamic Rendering + Voice/SFX Mix)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 22K Price ({dur_price:.1f}s)...")
         await status_msg.edit_text("💎 **5/6: Processing Today's Rate Chart...**")
-        raw_price = await asyncio.to_thread(price_22k.main, source=source)
+        
+        raw_price = await asyncio.to_thread(price_22k.main, source=source, duration_sec=dur_price)
 
         synced_price = os.path.join(videos_dir, f"price_synced_{ts}.mp4")
-        pad_dur_2 = max(0.5, dur_price - 7.0 + 0.5)
         fade_st_2 = max(0.1, dur_price - 0.6)
 
         price_sync_cmd = [
-            "ffmpeg", "-y", "-i", raw_price, "-i", audio_price,
+            "ffmpeg", "-y",
+            "-i", raw_price,
+            "-i", audio_price,
             "-filter_complex",
-            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop_duration={pad_dur_2},fade=t=out:st={fade_st_2}:d=0.6[v]",
-            "-map", "[v]", "-map", "1:a",
+            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,fade=t=out:st={fade_st_2}:d=0.6[v];"
+            "[0:a]volume=0.8,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,apad[a_sfx];"
+            "[1:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_vox];"
+            "[a_sfx][a_vox]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[aout]",
+            "-map", "[v]", "-map", "[aout]",
             "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
             "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
