@@ -75,7 +75,7 @@ def combine_wav_files(input_paths, output_path, pause_duration=0.25):
     data = []
     params = None
     for p in input_paths:
-        if os.path.exists(p):
+        if p and os.path.exists(p) and os.path.getsize(p) > 1000:
             with wave.open(p, "rb") as wf:
                 if params is None:
                     params = wf.getparams()
@@ -128,7 +128,7 @@ def clean_intro_audios_dir(audios_dir: str):
     if not os.path.exists(audios_dir):
         return
     for fname in os.listdir(audios_dir):
-        if fname.startswith(("comp_", "price_", "master_", "section_")) and fname.endswith(".wav"):
+        if fname.startswith(("comp_audio_", "price_audio_", "master_", "section_")) and fname.endswith(".wav"):
             try:
                 os.remove(os.path.join(audios_dir, fname))
             except Exception:
@@ -160,8 +160,15 @@ async def execute_full_production(client: Client, message: Message, source: str)
         GLOBAL_STATE.set_status("Scripting", f"Generating {source} Malayalam script...")
         await status_msg.edit_text("📜 **1/6: Generating Malayalam Script...**")
         formatted_script = await asyncio.to_thread(script.get_script_akg if source == "akgsma" else script.get_script_gd)
+        
+        # Stop immediately if scrape failed with an error
+        if formatted_script.startswith("❌"):
+            await status_msg.edit_text(formatted_script)
+            GLOBAL_STATE.set_status("Error", formatted_script)
+            return
+
         await message.reply_text(formatted_script)
-        GLOBAL_STATE.log(f"Script sent for {source}.")
+        GLOBAL_STATE.log(f"Script generated for {source}.")
 
         # STEP 2: CONCURRENT PARALLEL TTS
         GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers concurrently...")
@@ -183,8 +190,13 @@ async def execute_full_production(client: Client, message: Message, source: str)
             asyncio.gather(*price_tasks)
         )
 
-        comp_parts = [p for p in comp_results if p and os.path.exists(p)]
-        price_parts = [p for p in price_results if p and os.path.exists(p)]
+        comp_parts = [p for p in comp_results if p and os.path.exists(p) and os.path.getsize(p) > 1000]
+        price_parts = [p for p in price_results if p and os.path.exists(p) and os.path.getsize(p) > 1000]
+
+        if not comp_parts:
+            raise RuntimeError("TTS failed to synthesize 7-day comparison audio. Check API keys and network connection.")
+        if not price_parts:
+            raise RuntimeError("TTS failed to synthesize today's rate audio. Check API keys and network connection.")
 
         audio_comp = os.path.join(tts_audios_dir, f"comp_audio_{ts}.wav")
         combine_wav_files(comp_parts, audio_comp, pause_duration=0.25)
@@ -193,6 +205,11 @@ async def execute_full_production(client: Client, message: Message, source: str)
         audio_price = os.path.join(tts_audios_dir, f"price_audio_{ts}.wav")
         combine_wav_files(price_parts, audio_price, pause_duration=0.25)
         dur_price = get_audio_duration_seconds(audio_price)
+
+        if not os.path.exists(audio_comp) or dur_comp < 1.0:
+            raise RuntimeError("7-Day comparison audio file could not be created.")
+        if not os.path.exists(audio_price) or dur_price < 1.0:
+            raise RuntimeError("Today's price audio file could not be created.")
 
         await client.send_audio(chat_id=message.chat.id, audio=audio_comp, caption=f"🎙️ **7-Day Comparison Voiceover** ({dur_comp:.1f}s)")
         await client.send_audio(chat_id=message.chat.id, audio=audio_price, caption=f"🎙️ **Today's Rate Voiceover** ({dur_price:.1f}s)")
@@ -216,7 +233,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, intro_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment**")
 
-        # STEP 4: 7-DAY COMPARISON (Continuous dynamic rendering + voice/SFX mix)
+        # STEP 4: 7-DAY COMPARISON (Full-duration dynamic rendering + voice/SFX mix)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 7-Day Chart ({dur_comp:.1f}s)...")
         await status_msg.edit_text("📊 **4/6: Processing 7-Day Comparison Chart...**")
         
@@ -243,7 +260,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, comp_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_comp, caption=f"📈 **7-Day Price Comparison** ({dur_comp:.1f}s)")
 
-        # STEP 5: 22K PRICE CHART (Full-Duration Dynamic Rendering + Voice/SFX Mix)
+        # STEP 5: 22K PRICE CHART (Full-duration dynamic rendering + voice/SFX mix)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 22K Price ({dur_price:.1f}s)...")
         await status_msg.edit_text("💎 **5/6: Processing Today's Rate Chart...**")
         
@@ -363,18 +380,24 @@ async def run_bot():
         @app.on_message(filters.command("priceakg") & filters.private)
         async def handle_priceakg(client: Client, message: Message):
             status_msg = await message.reply_text("⏳ **Rendering 3D Price Chart (AKGSMA)...**")
-            vid_path = await asyncio.to_thread(price_22k.main, source="akgsma")
-            if vid_path and os.path.exists(vid_path):
-                await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📊 **22K Gold Price (AKGSMA)**")
-                await status_msg.delete()
+            try:
+                vid_path = await asyncio.to_thread(price_22k.main, source="akgsma")
+                if vid_path and os.path.exists(vid_path):
+                    await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📊 **22K Gold Price (AKGSMA)**")
+                    await status_msg.delete()
+            except Exception as err:
+                await status_msg.edit_text(f"❌ **Error:** `{err}`")
 
         @app.on_message(filters.command("pricegd") & filters.private)
         async def handle_pricegd(client: Client, message: Message):
             status_msg = await message.reply_text("⏳ **Rendering 3D Price Chart (GoodReturns)...**")
-            vid_path = await asyncio.to_thread(price_22k.main, source="goodreturns")
-            if vid_path and os.path.exists(vid_path):
-                await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📊 **22K Gold Price (GoodReturns)**")
-                await status_msg.delete()
+            try:
+                vid_path = await asyncio.to_thread(price_22k.main, source="goodreturns")
+                if vid_path and os.path.exists(vid_path):
+                    await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📊 **22K Gold Price (GoodReturns)**")
+                    await status_msg.delete()
+            except Exception as err:
+                await status_msg.edit_text(f"❌ **Error:** `{err}`")
 
         @app.on_message(filters.command("gencomp") & filters.private)
         async def handle_gencomp(client: Client, message: Message):
@@ -418,6 +441,8 @@ async def run_bot():
             a_path = await tts.generate_speech(u_text)
             if a_path and os.path.exists(a_path):
                 await client.send_audio(chat_id=message.chat.id, audio=a_path, caption=f"🎙️ `{u_text}`")
+            else:
+                await message.reply_text("❌ **Error:** Voice synthesis failed. Check server logs.")
 
         await app.start()
         GLOBAL_STATE.log("Bot active and listening for commands.")
