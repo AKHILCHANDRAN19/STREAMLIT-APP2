@@ -29,8 +29,8 @@ SFX_PATH = os.path.join(AUDIOS_DIR, "price_sfx.wav")
 WIDTH, HEIGHT = 1920, 1080
 FPS = 30
 DURATION_SEC = 7.5
-DEFAULT_TOTAL_FRAMES = int(FPS * DURATION_SEC)  # 225 frames
-ANIM_FRAMES = 50  # 1.6s entrance animation
+DEFAULT_TOTAL_FRAMES = int(FPS * DURATION_SEC)
+ANIM_FRAMES = 50
 
 
 # ==========================================
@@ -104,13 +104,6 @@ def linear_gradient_2d(width, height, color_top, color_bot):
 # PROCEDURAL SOUND SYNTHESIZER (WAVE)
 # ==========================================
 def synthesize_price_sfx(output_path, total_duration, sample_rate=44100):
-    """
-    Synthesizes custom cinematic audio:
-    1. Pillar rise whoosh & thud (0.0s - 0.7s)
-    2. Card spring-drop swoosh and lock (0.4s - 1.1s)
-    3. Rapid digital cash register counter ticks (0.6s - 1.5s)
-    4. Warm low ambient pad underlying the audio
-    """
     total_samples = int(total_duration * sample_rate)
     left = np.zeros(total_samples, dtype=np.float32)
     right = np.zeros(total_samples, dtype=np.float32)
@@ -147,13 +140,12 @@ def synthesize_price_sfx(output_path, total_duration, sample_rate=44100):
         tick_time = 0.60 + k * 0.05
         inject(tick_time, single_tick * 0.9, single_tick * 1.1)
 
-    # 4. Low warm ambient tone
+    # 4. Low warm ambient pad
     t_amb = np.linspace(0, total_duration, total_samples, endpoint=False)
     amb = np.sin(2.0 * np.pi * 120.0 * t_amb) * 0.04
     left += amb
     right += amb
 
-    # Soft limiter & 16-bit PCM conversion
     left = (np.tanh(left) * 32767).astype(np.int16)
     right = (np.tanh(right) * 32767).astype(np.int16)
 
@@ -332,7 +324,7 @@ def pre_render_gold_card_base(box_w, box_h):
         align="center",
     )
 
-    # Row 1 Shell (1 Gram) - Expanded Height for Large Font
+    # Row 1 Shell (1 Gram) - Expanded Height for 60px Font
     row1_y = badge_y + 64
     row_h = 100
     draw.rounded_rectangle(
@@ -353,7 +345,7 @@ def pre_render_gold_card_base(box_w, box_h):
         malayalam=True,
     )
 
-    # Row 2 Shell (1 Pavan) - Expanded Height for Large Font
+    # Row 2 Shell (1 Pavan) - Expanded Height for 60px Font
     row2_y = row1_y + row_h + 22
     draw.rounded_rectangle(
         [(bx + 30, row2_y), (bx + box_w - 30, row2_y + row_h)],
@@ -399,14 +391,19 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
     
     if source == "akgsma":
         akg_data = scrapping.scrape_akgsma_22k()
-        today_1g = akg_data.get('today_1g', gr_data.get('today_1g', 0))
+        # Strictly raise error if AKGSMA fails instead of drawing wrong GoodReturns data!
+        if "error" in akg_data or not akg_data.get("today_1g"):
+            raise RuntimeError(f"AKGSMA live rate failed to fetch: {akg_data.get('error')}")
+        today_1g = akg_data["today_1g"]
     else:
-        today_1g = gr_data.get('today_1g', 0)
+        if "error" in gr_data or not gr_data.get("today_1g"):
+            raise RuntimeError(f"GoodReturns live rate failed to fetch: {gr_data.get('error')}")
+        today_1g = gr_data["today_1g"]
         
     yest_1g = gr_data.get('yest_1g', 0)
     today_8g = today_1g * 8
 
-    # Dynamic duration handling
+    # Dynamic duration handling (Matches audio length)
     effective_duration = float(duration_sec) if duration_sec and duration_sec > 1.0 else DURATION_SEC
     TOTAL_FRAMES = int(FPS * effective_duration)
 
@@ -495,7 +492,7 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
     p_x = np.random.uniform(0, WIDTH, P_COUNT).astype(np.float32)
     p_y = np.random.uniform(0, HEIGHT, P_COUNT).astype(np.float32)
     p_vx = np.random.uniform(-0.5, 0.5, P_COUNT).astype(np.float32)
-    p_vy = np.random.uniform(-1.2, -0.3, P_COUNT).astype(np.float32)  # Gentle upward float
+    p_vy = np.random.uniform(-1.2, -0.3, P_COUNT).astype(np.float32)
     p_sparkle = np.random.uniform(0, 2 * math.pi, P_COUNT).astype(np.float32)
 
     gold_colors_bgr = np.array([
@@ -514,7 +511,7 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
         "-f", "rawvideo", "-vcodec", "rawvideo", "-s", f"{WIDTH}x{HEIGHT}",
         "-pix_fmt", "bgr24", "-r", str(FPS), "-i", "-",
         "-i", SFX_PATH,
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
         "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
         "-pix_fmt", "yuv420p", "-t", str(effective_duration),
         "-movflags", "+faststart", output_video_path,
@@ -529,7 +526,6 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
     # ==================================================
     for frame_idx in range(TOTAL_FRAMES):
         frame = base_bg.copy()
-        t_sec = frame_idx / FPS
 
         # 1. Update 1px Micro-Gold Dust Particles
         p_x += p_vx
@@ -550,7 +546,6 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
                 current_h = int(col["target_h"] * bar_ease)
             else:
                 t_bar = 1.0
-                # Organic breathing micro-pulse once arrived
                 pulse = math.sin(frame_idx * 0.09 + col["stagger_start"]) * 2.5
                 current_h = int(col["target_h"] + pulse)
 
@@ -571,12 +566,11 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
         current_box_y = int(-box_h + (target_box_y + box_h) * box_ease)
 
         if current_box_y + box_h > 0:
-            # Dynamic Card Layer
             card_dynamic = card_base.copy()
             c_draw = ImageDraw.Draw(card_dynamic)
             bx_c = pad
 
-            # Digital Price Counter Roll-up (Interpolating during entrance)
+            # Digital Price Counter Roll-up
             if frame_idx < 15:
                 count_ratio = 0.0
             elif frame_idx < 45:
@@ -616,7 +610,7 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
             dot_cy = footer_y
             c_draw.ellipse([(dot_cx - 6, dot_cy - 6), (dot_cx + 6, dot_cy + 6)], fill=(34, 197, 94, 255))
 
-            # Radar expanding ping ring (repeats every 2 seconds)
+            # Radar expanding ping ring (2.0s repeat)
             ping_prog = (frame_idx % 60) / 60.0
             ping_rad = int(6 + ping_prog * 18)
             ping_alpha = int(220 * (1.0 - ping_prog))
@@ -642,7 +636,6 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
 
             frame.alpha_composite(card_with_glow, (target_box_x - pad, current_box_y - pad))
 
-        # Convert to BGR array for 1px Particle Rendering
         frame_bgr = cv2.cvtColor(np.array(frame.convert("RGB")), cv2.COLOR_RGB2BGR)
 
         # 4. Draw 1-Pixel Micro-Gold Dust & Diamond Sparkles
@@ -651,13 +644,10 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
         valid = (xi >= 0) & (xi < WIDTH) & (yi >= 0) & (yi < HEIGHT)
         valid_idx = np.where(valid)[0]
 
-        # Twinkle calculation
         twinkle = np.sin(frame_idx * 0.18 + p_sparkle[valid_idx])
         is_sparkle = twinkle > 0.82
 
-        # Assign standard 1px gold colors
         frame_bgr[yi[valid_idx], xi[valid_idx]] = gold_colors_bgr[p_color_idx[valid_idx]]
-        # Assign bright specular white-gold diamond sparkles
         if np.any(is_sparkle):
             sp_idx = valid_idx[is_sparkle]
             frame_bgr[yi[sp_idx], xi[sp_idx]] = [255, 255, 255]
