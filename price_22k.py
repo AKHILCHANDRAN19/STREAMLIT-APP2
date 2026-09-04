@@ -5,9 +5,10 @@ import shutil
 import subprocess
 import sys
 import time
+import wave
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 import scrapping
 
@@ -17,15 +18,19 @@ import scrapping
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(BASE_DIR, "Fonts")
 VIDEOS_DIR = os.path.join(BASE_DIR, "Videos")
+AUDIOS_DIR = os.path.join(BASE_DIR, "Audios")
+
 os.makedirs(VIDEOS_DIR, exist_ok=True)
+os.makedirs(AUDIOS_DIR, exist_ok=True)
 
 FONT_MALAYALAM = os.path.join(FONTS_DIR, "AnekMalayalam-ExtraBold.ttf")
+SFX_PATH = os.path.join(AUDIOS_DIR, "price_sfx.wav")
 
 WIDTH, HEIGHT = 1920, 1080
 FPS = 30
-DURATION_SEC = 7.0
-DEFAULT_TOTAL_FRAMES = int(FPS * DURATION_SEC)  # 210 frames
-ANIM_FRAMES = 50  # 1.6s dynamic animation
+DURATION_SEC = 7.5
+DEFAULT_TOTAL_FRAMES = int(FPS * DURATION_SEC)  # 225 frames
+ANIM_FRAMES = 50  # 1.6s entrance animation
 
 
 # ==========================================
@@ -35,15 +40,10 @@ def get_font(size, bold=False, malayalam=False):
     candidate_paths = [
         FONT_MALAYALAM,
         os.path.join(FONTS_DIR, "AnekMalayalam-ExtraBold.ttf"),
-        os.path.join(FONTS_DIR, "Roboto-Bold.ttf" if bold else "Roboto-Regular.ttf"),
         os.path.join(FONTS_DIR, "Montserrat-ExtraBold.ttf" if bold else "Montserrat-Bold.ttf"),
-        "AnekMalayalam-ExtraBold.ttf",
+        os.path.join(FONTS_DIR, "Roboto-Bold.ttf" if bold else "Roboto-Regular.ttf"),
         "/system/fonts/Roboto-Bold.ttf" if bold else "/system/fonts/Roboto-Regular.ttf",
-        "/system/fonts/NotoSans-Bold.ttf" if bold else "/system/fonts/NotoSans-Regular.ttf",
-        "/system/fonts/DroidSans-Bold.ttf" if bold else "/system/fonts/DroidSans.ttf",
-        "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
-        "arialbd.ttf" if bold else "arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     ]
 
     for p in candidate_paths:
@@ -52,7 +52,7 @@ def get_font(size, bold=False, malayalam=False):
                 return ImageFont.truetype(p, size)
             except Exception:
                 pass
-    return None
+    return ImageFont.load_default()
 
 
 def draw_text_safe(
@@ -68,66 +68,20 @@ def draw_text_safe(
     malayalam=False,
 ):
     font = get_font(size, bold=bold, malayalam=malayalam)
-    if font is not None:
-        draw = ImageDraw.Draw(draw_img)
-        if multiline:
-            draw.multiline_text(
-                pos,
-                text,
-                fill=color,
-                font=font,
-                align=align,
-                anchor="ma",
-                spacing=line_spacing,
-            )
-        else:
-            anchor = (
-                "mm"
-                if align == "center"
-                else ("lm" if align == "left" else "rm")
-            )
-            draw.text(pos, text, fill=color, font=font, anchor=anchor)
+    draw = ImageDraw.Draw(draw_img)
+    if multiline:
+        draw.multiline_text(
+            pos,
+            text,
+            fill=color,
+            font=font,
+            align=align,
+            anchor="ma",
+            spacing=line_spacing,
+        )
     else:
-        # Fallback Vector Text
-        img_np = np.array(draw_img)
-        font_face = cv2.FONT_HERSHEY_DUPLEX if bold else cv2.FONT_HERSHEY_SIMPLEX
-        scale = size / 30.0
-        thickness = 2 if bold else 1
-
-        if multiline:
-            lines = text.split("\n")
-            curr_y = int(pos[1])
-            for line in lines:
-                (tw, th), _ = cv2.getTextSize(
-                    line, font_face, scale, thickness
-                )
-                tx = int(pos[0] - tw / 2) if align == "center" else int(pos[0])
-                cv2.putText(
-                    img_np,
-                    line,
-                    (tx, curr_y + th),
-                    font_face,
-                    scale,
-                    color[:3],
-                    thickness,
-                    cv2.LINE_AA,
-                )
-                curr_y += th + line_spacing + 6
-        else:
-            (tw, th), _ = cv2.getTextSize(text, font_face, scale, thickness)
-            tx = int(pos[0] - tw / 2) if align == "center" else int(pos[0])
-            ty = int(pos[1] + th / 2)
-            cv2.putText(
-                img_np,
-                text,
-                (tx, ty),
-                font_face,
-                scale,
-                color[:3],
-                thickness,
-                cv2.LINE_AA,
-            )
-        draw_img.paste(Image.fromarray(img_np))
+        anchor = "mm" if align == "center" else ("lm" if align == "left" else "rm")
+        draw.text(pos, text, fill=color, font=font, anchor=anchor)
 
 
 def ease_out_back(t, overshoot=1.4):
@@ -147,11 +101,77 @@ def linear_gradient_2d(width, height, color_top, color_bot):
 
 
 # ==========================================
+# PROCEDURAL SOUND SYNTHESIZER (WAVE)
+# ==========================================
+def synthesize_price_sfx(output_path, total_duration, sample_rate=44100):
+    """
+    Synthesizes custom cinematic audio:
+    1. Pillar rise whoosh & thud (0.0s - 0.7s)
+    2. Card spring-drop swoosh and lock (0.4s - 1.1s)
+    3. Rapid digital cash register counter ticks (0.6s - 1.5s)
+    4. Warm low ambient pad underlying the audio
+    """
+    total_samples = int(total_duration * sample_rate)
+    left = np.zeros(total_samples, dtype=np.float32)
+    right = np.zeros(total_samples, dtype=np.float32)
+
+    def inject(start_sec, s_l, s_r):
+        st = int(start_sec * sample_rate)
+        ed = min(total_samples, st + len(s_l))
+        vl = ed - st
+        if vl > 0:
+            left[st:ed] += s_l[:vl]
+            right[st:ed] += s_r[:vl]
+
+    # 1. Pillar Riser & Solid Thud (t = 0.1s)
+    t1 = np.linspace(0, 0.9, int(sample_rate * 0.9), endpoint=False)
+    sub = np.sin(2.0 * np.pi * (110.0 * np.exp(-t1 * 3.5) + 38.0) * t1) * np.exp(-t1 * 2.8) * 0.55
+    punch = np.random.uniform(-1.0, 1.0, len(t1)) * np.exp(-t1 * 35.0) * 0.25
+    thud = sub + punch
+    inject(0.1, thud, thud)
+
+    # 2. Card Spring-Drop Swoosh (t = 0.45s)
+    t2 = np.linspace(0, 0.8, int(sample_rate * 0.8), endpoint=False)
+    swoosh_freq = 450.0 * np.exp(-t2 * 4.0) + 120.0
+    swoosh = np.sin(2.0 * np.pi * np.cumsum(swoosh_freq) / sample_rate) * np.exp(-t2 * 4.0) * 0.35
+    lock = np.sin(2.0 * np.pi * 840.0 * t2) * np.exp(-t2 * 25.0) * 0.25
+    card_sfx = swoosh + lock
+    inject(0.45, card_sfx * 0.85, card_sfx * 0.95)
+
+    # 3. Rapid Digital Counter Ticks (t = 0.6s - 1.5s)
+    tick_dur = 0.03
+    t_tick = np.linspace(0, tick_dur, int(sample_rate * tick_dur), endpoint=False)
+    single_tick = (np.sin(2.0 * np.pi * 2400.0 * t_tick) + 0.4 * np.sin(2.0 * np.pi * 3600.0 * t_tick)) * np.exp(-t_tick * 120.0) * 0.22
+
+    for k in range(16):
+        tick_time = 0.60 + k * 0.05
+        inject(tick_time, single_tick * 0.9, single_tick * 1.1)
+
+    # 4. Low warm ambient tone
+    t_amb = np.linspace(0, total_duration, total_samples, endpoint=False)
+    amb = np.sin(2.0 * np.pi * 120.0 * t_amb) * 0.04
+    left += amb
+    right += amb
+
+    # Soft limiter & 16-bit PCM conversion
+    left = (np.tanh(left) * 32767).astype(np.int16)
+    right = (np.tanh(right) * 32767).astype(np.int16)
+
+    interleaved = np.empty((left.size + right.size,), dtype=np.int16)
+    interleaved[0::2] = left
+    interleaved[1::2] = right
+
+    with wave.open(output_path, "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(interleaved.tobytes())
+
+
+# ==========================================
 # 3D PILLAR & GROWING DOTTED LINE RENDERER
 # ==========================================
-def draw_animated_pillar(
-    canvas, cx, cy_base, rx, ry, height, theme, local_progress
-):
+def draw_animated_pillar(canvas, cx, cy_base, rx, ry, height, theme, local_progress):
     if height <= 4:
         return
 
@@ -173,9 +193,7 @@ def draw_animated_pillar(
     if lw > 0 and lh > 0:
         mask_l = np.zeros((H, W), dtype=np.uint8)
         cv2.fillPoly(mask_l, [left_poly], 255)
-        grad_l = linear_gradient_2d(
-            lw, lh, theme["left_top"], theme["left_bot"]
-        )
+        grad_l = linear_gradient_2d(lw, lh, theme["left_top"], theme["left_bot"])
         face_l = np.zeros((H, W, 4), dtype=np.uint8)
         crop_m_l = mask_l[ly : ly + lh, lx : lx + lw]
         face_l[ly : ly + lh, lx : lx + lw][crop_m_l > 0] = grad_l[crop_m_l > 0]
@@ -188,14 +206,10 @@ def draw_animated_pillar(
     if rw > 0 and rh > 0:
         mask_r = np.zeros((H, W), dtype=np.uint8)
         cv2.fillPoly(mask_r, [right_poly], 255)
-        grad_r = linear_gradient_2d(
-            rw, rh, theme["right_top"], theme["right_bot"]
-        )
+        grad_r = linear_gradient_2d(rw, rh, theme["right_top"], theme["right_bot"])
         face_r = np.zeros((H, W, 4), dtype=np.uint8)
         crop_m_r = mask_r[ry_b : ry_b + rh, rx_b : rx_b + rw]
-        face_r[ry_b : ry_b + rh, rx_b : rx_b + rw][crop_m_r > 0] = grad_r[
-            crop_m_r > 0
-        ]
+        face_r[ry_b : ry_b + rh, rx_b : rx_b + rw][crop_m_r > 0] = grad_r[crop_m_r > 0]
     else:
         face_r = np.zeros((H, W, 4), dtype=np.uint8)
 
@@ -207,9 +221,7 @@ def draw_animated_pillar(
     if tw > 0 and th > 0:
         mask_t = np.zeros((H, W), dtype=np.uint8)
         cv2.fillPoly(mask_t, [top_poly], 255)
-        grad_t = linear_gradient_2d(
-            tw, th, theme["top_light"], theme["top_dark"]
-        )
+        grad_t = linear_gradient_2d(tw, th, theme["top_light"], theme["top_dark"])
         face_t = np.zeros((H, W, 4), dtype=np.uint8)
         crop_m_t = mask_t[ty : ty + th, tx : tx + tw]
         face_t[ty : ty + th, tx : tx + tw][crop_m_t > 0] = grad_t[crop_m_t > 0]
@@ -224,7 +236,7 @@ def draw_animated_pillar(
     e_draw.line([b_lft, b_bot, b_rgt], fill=(255, 255, 255, 120), width=1)
     canvas.alpha_composite(edge_layer)
 
-    # 5. Dotted Line & Floating Numbers Growing with Animation
+    # 5. Dotted Line & Floating Numbers
     if local_progress > 0.05:
         line_growth = min(1.0, local_progress / 0.85)
         dash_len = int(75 * line_growth)
@@ -245,13 +257,12 @@ def draw_animated_pillar(
             curr_y -= 12
         canvas.alpha_composite(anno_layer)
 
-        # Number rides dynamically on the tip of the rising dotted line
         num_color = (*theme["icon_color"][:3], alpha)
         draw_text_safe(
             canvas,
             theme["top_num"],
             (cx, dash_end_y - 18),
-            size=34,
+            size=36,
             color=num_color,
             bold=True,
             align="center",
@@ -259,159 +270,122 @@ def draw_animated_pillar(
 
 
 # ==========================================
-# PRE-RENDER MALAYALAM GOLD PRICE BOX
+# PRE-RENDER GOLD PRICE CARD BASE
 # ==========================================
-def pre_render_gold_card_with_glow(box_w, box_h, price_1g_str, price_8g_str):
-    padding = 40
+def pre_render_gold_card_base(box_w, box_h):
+    padding = 45
     total_w = box_w + padding * 2
     total_h = box_h + padding * 2
-    full_card = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-
-    # Glow Layer
-    glow = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-    g_draw = ImageDraw.Draw(glow)
-    g_draw.rounded_rectangle(
-        [(padding - 10, padding - 10), (padding + box_w + 10, padding + box_h + 10)],
-        radius=40,
-        fill=(255, 195, 45, 55),
-    )
-    glow_blurred = cv2.GaussianBlur(np.array(glow), (31, 31), sigmaX=12, sigmaY=12)
-    full_card.alpha_composite(Image.fromarray(glow_blurred))
-
-    # Card Base
-    card_draw = ImageDraw.Draw(full_card)
+    card = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     bx, by = padding, padding
+    draw = ImageDraw.Draw(card)
 
-    card_draw.rounded_rectangle(
+    # Card Base Container
+    draw.rounded_rectangle(
         [(bx, by), (bx + box_w - 1, by + box_h - 1)],
-        radius=32,
-        fill=(255, 255, 255, 250),
-        outline=(255, 205, 80, 220),
+        radius=36,
+        fill=(255, 255, 255, 252),
+        outline=(255, 205, 80, 230),
         width=3,
     )
 
-    # Header Banner
+    # Header Banner: "ഇന്നത്തെ സ്വർണ്ണവില"
     header_w = box_w - 60
     header_h = 76
     hx, hy = bx + 30, by + 30
-    card_draw.rounded_rectangle(
+    draw.rounded_rectangle(
         [(hx, hy), (hx + header_w, hy + header_h)],
         radius=20,
         fill=(255, 160, 0, 255),
         outline=(255, 220, 90, 255),
         width=2,
     )
-
-    # Title: "ഇന്നത്തെ സ്വർണ്ണവില"
     draw_text_safe(
-        full_card,
+        card,
         "ഇന്നത്തെ സ്വർണ്ണവില",
         (hx + header_w // 2, hy + header_h // 2 + 1),
-        size=36,
+        size=38,
         color=(255, 255, 255, 255),
         bold=True,
         align="center",
         malayalam=True,
     )
 
-    # Badge Pill
-    badge_y = hy + header_h + 24
-    badge_w, badge_h = 260, 34
+    # Badge Pill: "22K • 916 BIS HALLMARKED"
+    badge_y = hy + header_h + 20
+    badge_w, badge_h = 280, 36
     p_x = bx + (box_w - badge_w) // 2
-    card_draw.rounded_rectangle(
+    draw.rounded_rectangle(
         [(p_x, badge_y), (p_x + badge_w, badge_y + badge_h)],
-        radius=12,
+        radius=14,
         fill=(245, 248, 252, 255),
         outline=(220, 230, 242, 255),
         width=1,
     )
     draw_text_safe(
-        full_card,
+        card,
         "22K  •  916 BIS HALLMARKED",
         (p_x + badge_w // 2, badge_y + badge_h // 2),
-        size=17,
+        size=18,
         color=(110, 130, 155, 255),
         bold=True,
         align="center",
     )
 
-    # Row 1 (1 Gram)
-    row1_y = badge_y + 80
-    card_draw.rounded_rectangle(
-        [(bx + 35, row1_y - 20), (bx + box_w - 35, row1_y + 55)],
-        radius=16,
-        fill=(248, 251, 255, 255),
-        outline=(225, 238, 248, 255),
-        width=1,
+    # Row 1 Shell (1 Gram) - Expanded Height for Large Font
+    row1_y = badge_y + 64
+    row_h = 100
+    draw.rounded_rectangle(
+        [(bx + 30, row1_y), (bx + box_w - 30, row1_y + row_h)],
+        radius=20,
+        fill=(248, 252, 255, 255),
+        outline=(220, 238, 250, 255),
+        width=2,
     )
     draw_text_safe(
-        full_card,
+        card,
         "1 ഗ്രാം",
-        (bx + 65, row1_y + 16),
-        size=32,
+        (bx + 60, row1_y + row_h // 2),
+        size=42,
         color=(45, 65, 90, 255),
         bold=True,
         align="left",
         malayalam=True,
     )
-    draw_text_safe(
-        full_card,
-        price_1g_str,
-        (bx + box_w - 65, row1_y + 16),
-        size=36,
-        color=(0, 160, 145, 255),
-        bold=True,
-        align="right",
-        malayalam=True,
-    )
 
-    # Row 2 (1 Pavan)
-    row2_y = row1_y + 105
-    card_draw.rounded_rectangle(
-        [(bx + 35, row2_y - 20), (bx + box_w - 35, row2_y + 55)],
-        radius=16,
+    # Row 2 Shell (1 Pavan) - Expanded Height for Large Font
+    row2_y = row1_y + row_h + 22
+    draw.rounded_rectangle(
+        [(bx + 30, row2_y), (bx + box_w - 30, row2_y + row_h)],
+        radius=20,
         fill=(255, 248, 250, 255),
         outline=(255, 220, 230, 255),
-        width=1,
+        width=2,
     )
     draw_text_safe(
-        full_card,
+        card,
         "1 പവൻ",
-        (bx + 65, row2_y + 16),
-        size=32,
+        (bx + 60, row2_y + row_h // 2),
+        size=42,
         color=(45, 65, 90, 255),
         bold=True,
         align="left",
         malayalam=True,
     )
-    draw_text_safe(
-        full_card,
-        price_8g_str,
-        (bx + box_w - 65, row2_y + 16),
-        size=36,
-        color=(235, 25, 95, 255),
-        bold=True,
-        align="right",
-        malayalam=True,
-    )
 
-    # Footer
-    footer_y = by + box_h - 40
-    card_draw.ellipse(
-        [(bx + box_w // 2 - 105, footer_y - 6), (bx + box_w // 2 - 93, footer_y + 6)],
-        fill=(34, 197, 94, 255),
-    )
+    # Footer Text
+    footer_y = by + box_h - 38
     draw_text_safe(
-        full_card,
+        card,
         "LIVE MARKET UPDATE",
-        (bx + box_w // 2 + 10, footer_y),
-        size=16,
+        (bx + box_w // 2 + 15, footer_y),
+        size=17,
         color=(125, 145, 170, 255),
         bold=True,
         align="center",
     )
 
-    return full_card, padding
+    return card, padding, row1_y, row2_y, row_h, footer_y
 
 
 # ==========================================
@@ -420,7 +394,7 @@ def pre_render_gold_card_with_glow(box_w, box_h, price_1g_str, price_8g_str):
 def main(source="goodreturns", duration_sec=None, output_override=None):
     start_time = time.time()
 
-    print(f"\n[DATA] Fetching live data from {source}...")
+    print(f"\n[DATA] Fetching live rates from {source}...")
     gr_data = scrapping.scrape_goodreturns_22k()
     
     if source == "akgsma":
@@ -432,11 +406,12 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
     yest_1g = gr_data.get('yest_1g', 0)
     today_8g = today_1g * 8
 
-    # Dynamic Frame Count driven by Audio Duration
-    if duration_sec:
-        TOTAL_FRAMES = max(DEFAULT_TOTAL_FRAMES, int(FPS * duration_sec))
-    else:
-        TOTAL_FRAMES = DEFAULT_TOTAL_FRAMES
+    # Dynamic duration handling
+    effective_duration = float(duration_sec) if duration_sec and duration_sec > 1.0 else DURATION_SEC
+    TOTAL_FRAMES = int(FPS * effective_duration)
+
+    # Synthesize synchronized procedural audio
+    synthesize_price_sfx(SFX_PATH, total_duration=effective_duration)
 
     # Dynamic Height adjustment matching relative trends
     if today_1g >= yest_1g:
@@ -446,10 +421,8 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
         yest_h = 620
         today_h = 470
 
-    # Pre-render Background Layer
-    bg_np = linear_gradient_2d(
-        WIDTH, HEIGHT, (244, 248, 252, 255), (232, 240, 248, 255)
-    )
+    # Pre-render Background
+    bg_np = linear_gradient_2d(WIDTH, HEIGHT, (244, 248, 252, 255), (232, 240, 248, 255))
     base_bg = Image.fromarray(bg_np)
 
     today_dt = datetime.datetime.now()
@@ -466,9 +439,6 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
 
     rx, ry, cy_base = 92, 46, 920
 
-    # =========================================================================
-    # THE TWO EXACT COLOR PALETTES FROM YOUR SCRIPT
-    # =========================================================================
     THEME_TURQUOISE = {
         "icon_color": (0, 170, 155, 255),
         "top_light": (0, 255, 210, 255),
@@ -489,7 +459,6 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
         "right_bot": (255, 95, 140, 195),
     }
 
-    # Dynamic opposing contrast
     if today_1g >= yest_1g:
         yest_theme = THEME_RED
         today_theme = THEME_TURQUOISE
@@ -498,27 +467,10 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
         today_theme = THEME_RED
 
     columns = [
-        # Bar 1: Yesterday's Bar
-        {
-            "cx": 360,
-            "target_h": yest_h,
-            "top_num": f"₹{int(yest_1g)}",
-            "date_text": date_yesterday,
-            "stagger_start": 0,
-            **yest_theme
-        },
-        # Bar 2: Today's Bar
-        {
-            "cx": 780,
-            "target_h": today_h,
-            "top_num": f"₹{int(today_1g)}",
-            "date_text": date_today,
-            "stagger_start": 10,
-            **today_theme
-        },
+        {"cx": 360, "target_h": yest_h, "top_num": f"₹{int(yest_1g)}", "date_text": date_yesterday, "stagger_start": 0, **yest_theme},
+        {"cx": 780, "target_h": today_h, "top_num": f"₹{int(today_1g)}", "date_text": date_today, "stagger_start": 10, **today_theme},
     ]
 
-    # Pre-render dynamic dates on the left of each bar
     for col in columns:
         draw_text_safe(
             base_bg,
@@ -532,86 +484,75 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
             line_spacing=6,
         )
 
-    # Pre-render Right Gold Card
-    box_w, box_h = 740, 520
-    target_box_x, target_box_y = 1080, 280
-    price_1g_str = f"₹ {int(today_1g):,} /-"
-    price_8g_str = f"₹ {int(today_8g):,} /-"
+    # Pre-render Gold Card Base Shell
+    box_w, box_h = 760, 550
+    target_box_x, target_box_y = 1060, 260
+    card_base, pad, r1_y, r2_y, row_h, footer_y = pre_render_gold_card_base(box_w, box_h)
 
-    cached_box_with_glow, pad = pre_render_gold_card_with_glow(
-        box_w, box_h, price_1g_str, price_8g_str
-    )
+    # 1-PIXEL MICRO-GOLD DUST PARTICLES (1,400 particles)
+    np.random.seed(42)
+    P_COUNT = 1400
+    p_x = np.random.uniform(0, WIDTH, P_COUNT).astype(np.float32)
+    p_y = np.random.uniform(0, HEIGHT, P_COUNT).astype(np.float32)
+    p_vx = np.random.uniform(-0.5, 0.5, P_COUNT).astype(np.float32)
+    p_vy = np.random.uniform(-1.2, -0.3, P_COUNT).astype(np.float32)  # Gentle upward float
+    p_sparkle = np.random.uniform(0, 2 * math.pi, P_COUNT).astype(np.float32)
+
+    gold_colors_bgr = np.array([
+        [40, 215, 255],   # Radiant Gold
+        [20, 185, 255],   # Classic Pure Gold
+        [10, 145, 235],   # Warm Deep Gold
+        [190, 240, 255],  # Specular Light Gold
+    ], dtype=np.uint8)
+    p_color_idx = np.random.randint(0, len(gold_colors_bgr), P_COUNT)
 
     output_video_path = output_override or os.path.join(VIDEOS_DIR, "price_22k.mp4")
 
-    # Encode with FFmpeg pipe (or cv2 fallback)
-    has_ffmpeg = shutil.which("ffmpeg") is not None
-    ffmpeg_proc = None
-    cv_writer = None
+    # Encode with FFmpeg muxing procedural audio
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo", "-s", f"{WIDTH}x{HEIGHT}",
+        "-pix_fmt", "bgr24", "-r", str(FPS), "-i", "-",
+        "-i", SFX_PATH,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+        "-pix_fmt", "yuv420p", "-t", str(effective_duration),
+        "-movflags", "+faststart", output_video_path,
+    ]
 
-    if has_ffmpeg:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "rawvideo",
-            "-vcodec",
-            "rawvideo",
-            "-s",
-            f"{WIDTH}x{HEIGHT}",
-            "-pix_fmt",
-            "bgr24",
-            "-r",
-            str(FPS),
-            "-i",
-            "-",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "22",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            output_video_path,
-        ]
-        ffmpeg_proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL
-        )
-    else:
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        cv_writer = cv2.VideoWriter(
-            output_video_path, fourcc, FPS, (WIDTH, HEIGHT)
-        )
+    ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
-    def write_frame_bytes(bgr_bytes):
-        if ffmpeg_proc:
-            ffmpeg_proc.stdin.write(bgr_bytes)
-        else:
-            cv_writer.write(
-                np.frombuffer(bgr_bytes, dtype=np.uint8).reshape(
-                    (HEIGHT, WIDTH, 3)
-                )
-            )
+    print(f"\n🚀 Rendering High-Impact 22K Graphics (Total {TOTAL_FRAMES} frames @ {FPS} FPS)...")
 
-    print(f"\n🚀 Rendering Sequential Animation (Total {TOTAL_FRAMES} frames @ {FPS} FPS)...")
-
-    # Phase 1: Sequential Ripple Motion
-    for frame_idx in range(ANIM_FRAMES):
+    # ==================================================
+    # MASTER RENDER LOOP
+    # ==================================================
+    for frame_idx in range(TOTAL_FRAMES):
         frame = base_bg.copy()
+        t_sec = frame_idx / FPS
 
-        # Render Left Pillars with Sequential Stagger
+        # 1. Update 1px Micro-Gold Dust Particles
+        p_x += p_vx
+        p_y += p_vy
+        p_x %= WIDTH
+        p_y %= HEIGHT
+
+        # 2. Render Left 3D Pillars (Entrance + Breathing micro-pulse)
         for col in columns:
             local_frame = frame_idx - col["stagger_start"]
             if local_frame < 0:
                 continue
 
             dur = 24.0
-            t_bar = min(1.0, local_frame / dur)
-            bar_ease = ease_out_back(t_bar, overshoot=1.35)
-            current_h = int(col["target_h"] * bar_ease)
+            if local_frame <= dur:
+                t_bar = min(1.0, local_frame / dur)
+                bar_ease = ease_out_back(t_bar, overshoot=1.35)
+                current_h = int(col["target_h"] * bar_ease)
+            else:
+                t_bar = 1.0
+                # Organic breathing micro-pulse once arrived
+                pulse = math.sin(frame_idx * 0.09 + col["stagger_start"]) * 2.5
+                current_h = int(col["target_h"] + pulse)
 
             draw_animated_pillar(
                 frame,
@@ -624,55 +565,110 @@ def main(source="goodreturns", duration_sec=None, output_override=None):
                 t_bar,
             )
 
-        # Right Gold Card Drops simultaneously with Elastic Bounce
+        # 3. Gold Card Drop & Elastic Bounce
         t_box = min(1.0, frame_idx / 35.0)
         box_ease = ease_out_back(t_box, overshoot=1.45)
         current_box_y = int(-box_h + (target_box_y + box_h) * box_ease)
 
         if current_box_y + box_h > 0:
-            frame.alpha_composite(
-                cached_box_with_glow,
-                (target_box_x - pad, current_box_y - pad),
+            # Dynamic Card Layer
+            card_dynamic = card_base.copy()
+            c_draw = ImageDraw.Draw(card_dynamic)
+            bx_c = pad
+
+            # Digital Price Counter Roll-up (Interpolating during entrance)
+            if frame_idx < 15:
+                count_ratio = 0.0
+            elif frame_idx < 45:
+                t_c = (frame_idx - 15) / 30.0
+                count_ratio = 1.0 - (1.0 - t_c) ** 3
+            else:
+                count_ratio = 1.0
+
+            curr_1g_val = int(today_1g * count_ratio)
+            curr_8g_val = int(today_8g * count_ratio)
+
+            price_1g_txt = f"₹ {curr_1g_val:,} /-"
+            price_8g_txt = f"₹ {curr_8g_val:,} /-"
+
+            # MAXIMIZED 60px ExtraBold Price Numerals
+            draw_text_safe(
+                card_dynamic,
+                price_1g_txt,
+                (bx_c + box_w - 55, r1_y + row_h // 2),
+                size=60,
+                color=(0, 165, 145, 255),
+                bold=True,
+                align="right",
+            )
+            draw_text_safe(
+                card_dynamic,
+                price_8g_txt,
+                (bx_c + box_w - 55, r2_y + row_h // 2),
+                size=60,
+                color=(235, 25, 95, 255),
+                bold=True,
+                align="right",
             )
 
-        frame_bgr = cv2.cvtColor(
-            np.array(frame.convert("RGB")), cv2.COLOR_RGB2BGR
-        )
-        write_frame_bytes(frame_bgr.tobytes())
+            # Live Radar Dot Animation
+            dot_cx = bx_c + box_w // 2 - 100
+            dot_cy = footer_y
+            c_draw.ellipse([(dot_cx - 6, dot_cy - 6), (dot_cx + 6, dot_cy + 6)], fill=(34, 197, 94, 255))
 
-    # Phase 2: Fully Extended Hold Frames (Covers full audio length without freezing or cutting)
-    final_frame = base_bg.copy()
-    for col in columns:
-        draw_animated_pillar(
-            final_frame,
-            col["cx"],
-            cy_base,
-            rx,
-            ry,
-            col["target_h"],
-            col,
-            1.0,
-        )
-    final_frame.alpha_composite(
-        cached_box_with_glow,
-        (target_box_x - pad, target_box_y - pad),
-    )
-    final_bgr = cv2.cvtColor(
-        np.array(final_frame.convert("RGB")), cv2.COLOR_RGB2BGR
-    )
-    final_bytes = final_bgr.tobytes()
+            # Radar expanding ping ring (repeats every 2 seconds)
+            ping_prog = (frame_idx % 60) / 60.0
+            ping_rad = int(6 + ping_prog * 18)
+            ping_alpha = int(220 * (1.0 - ping_prog))
+            c_draw.ellipse(
+                [(dot_cx - ping_rad, dot_cy - ping_rad), (dot_cx + ping_rad, dot_cy + ping_rad)],
+                outline=(34, 197, 94, ping_alpha),
+                width=2,
+            )
 
-    for i in range(ANIM_FRAMES, TOTAL_FRAMES):
-        write_frame_bytes(final_bytes)
+            # Pulsing Neon Glow Layer Behind Card
+            glow_pulse = 0.85 + 0.15 * math.sin(frame_idx * 0.12)
+            glow_alpha = int(55 * glow_pulse)
+            glow_img = Image.new("RGBA", card_dynamic.size, (0, 0, 0, 0))
+            g_draw = ImageDraw.Draw(glow_img)
+            g_draw.rounded_rectangle(
+                [(pad - 12, pad - 12), (pad + box_w + 12, pad + box_h + 12)],
+                radius=42,
+                fill=(255, 195, 45, glow_alpha),
+            )
+            glow_blurred = cv2.GaussianBlur(np.array(glow_img), (35, 35), sigmaX=14, sigmaY=14)
+            card_with_glow = Image.fromarray(glow_blurred)
+            card_with_glow.alpha_composite(card_dynamic)
 
-    if ffmpeg_proc:
-        ffmpeg_proc.stdin.close()
-        ffmpeg_proc.wait()
-    elif cv_writer:
-        cv_writer.release()
+            frame.alpha_composite(card_with_glow, (target_box_x - pad, current_box_y - pad))
+
+        # Convert to BGR array for 1px Particle Rendering
+        frame_bgr = cv2.cvtColor(np.array(frame.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+        # 4. Draw 1-Pixel Micro-Gold Dust & Diamond Sparkles
+        xi = p_x.astype(np.int32)
+        yi = p_y.astype(np.int32)
+        valid = (xi >= 0) & (xi < WIDTH) & (yi >= 0) & (yi < HEIGHT)
+        valid_idx = np.where(valid)[0]
+
+        # Twinkle calculation
+        twinkle = np.sin(frame_idx * 0.18 + p_sparkle[valid_idx])
+        is_sparkle = twinkle > 0.82
+
+        # Assign standard 1px gold colors
+        frame_bgr[yi[valid_idx], xi[valid_idx]] = gold_colors_bgr[p_color_idx[valid_idx]]
+        # Assign bright specular white-gold diamond sparkles
+        if np.any(is_sparkle):
+            sp_idx = valid_idx[is_sparkle]
+            frame_bgr[yi[sp_idx], xi[sp_idx]] = [255, 255, 255]
+
+        ffmpeg_proc.stdin.write(frame_bgr.tobytes())
+
+    ffmpeg_proc.stdin.close()
+    ffmpeg_proc.wait()
 
     elapsed = time.time() - start_time
-    print(f"\n\n✅ Done in {elapsed:.2f}s | Path:\n{output_video_path}\n")
+    print(f"\n✅ Done in {elapsed:.2f}s | Path:\n{output_video_path}\n")
     return output_video_path
 
 
