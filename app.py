@@ -6,6 +6,8 @@ import re
 import wave
 import subprocess
 import collections
+import shutil
+import gc
 from datetime import datetime, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -117,7 +119,7 @@ def split_script_into_chunks(raw_text: str):
     else:
         comp_chunks = [comp_clean] if comp_clean else []
 
-    # 2. Today's Price (Part 2) - NEVER sliced or truncated!
+    # 2. Today's Price (Part 2) - Kept intact as 1 complete unit
     price_raw = parts[2] if len(parts) > 2 else ""
     price_clean = re.sub(r"[*_━#()|]", "", price_raw).strip()
     price_chunks = [price_clean] if price_clean else []
@@ -161,7 +163,6 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await status_msg.edit_text("📜 **1/6: Generating Malayalam Script...**")
         formatted_script = await asyncio.to_thread(script.get_script_akg if source == "akgsma" else script.get_script_gd)
         
-        # Stop immediately if scrape failed with an error
         if formatted_script.startswith("❌"):
             await status_msg.edit_text(formatted_script)
             GLOBAL_STATE.set_status("Error", formatted_script)
@@ -171,7 +172,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         GLOBAL_STATE.log(f"Script generated for {source}.")
 
         # STEP 2: CONCURRENT PARALLEL TTS
-        GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers concurrently...")
+        GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers...")
         await status_msg.edit_text("🎙️ **2/6: Synthesizing Split Voiceovers in Parallel...**")
         comp_chunks, price_chunks = split_script_into_chunks(formatted_script)
         ts = int(now.timestamp())
@@ -194,9 +195,9 @@ async def execute_full_production(client: Client, message: Message, source: str)
         price_parts = [p for p in price_results if p and os.path.exists(p) and os.path.getsize(p) > 1000]
 
         if not comp_parts:
-            raise RuntimeError("TTS failed to synthesize 7-day comparison audio. Check API keys and network connection.")
+            raise RuntimeError("TTS failed to synthesize comparison voiceover. Check API keys.")
         if not price_parts:
-            raise RuntimeError("TTS failed to synthesize today's rate audio. Check API keys and network connection.")
+            raise RuntimeError("TTS failed to synthesize rate voiceover. Check API keys.")
 
         audio_comp = os.path.join(tts_audios_dir, f"comp_audio_{ts}.wav")
         combine_wav_files(comp_parts, audio_comp, pause_duration=0.25)
@@ -207,15 +208,16 @@ async def execute_full_production(client: Client, message: Message, source: str)
         dur_price = get_audio_duration_seconds(audio_price)
 
         if not os.path.exists(audio_comp) or dur_comp < 1.0:
-            raise RuntimeError("7-Day comparison audio file could not be created.")
+            raise RuntimeError("7-Day comparison audio file could not be verified.")
         if not os.path.exists(audio_price) or dur_price < 1.0:
-            raise RuntimeError("Today's price audio file could not be created.")
+            raise RuntimeError("Today's rate audio file could not be verified.")
 
         await client.send_audio(chat_id=message.chat.id, audio=audio_comp, caption=f"🎙️ **7-Day Comparison Voiceover** ({dur_comp:.1f}s)")
         await client.send_audio(chat_id=message.chat.id, audio=audio_price, caption=f"🎙️ **Today's Rate Voiceover** ({dur_price:.1f}s)")
         GLOBAL_STATE.log(f"Voiceovers ready. Comp: {dur_comp:.1f}s | Price: {dur_price:.1f}s")
+        gc.collect()
 
-        # STEP 3: 3D INTRO VIDEO
+        # STEP 3: 3D INTRO VIDEO (Eliminated redundant re-encode CPU bottleneck)
         GLOBAL_STATE.set_status("Rendering", "Rendering 3D Intro Video...")
         await status_msg.edit_text("🎬 **3/6: Rendering 3D Intro Video...**")
         await asyncio.to_thread(intro.main)
@@ -223,17 +225,14 @@ async def execute_full_production(client: Client, message: Message, source: str)
         raw_intro = os.path.join(videos_dir, "intro.mp4")
         optimized_intro = os.path.join(videos_dir, f"intro_opt_{ts}.mp4")
 
-        intro_cmd = [
-            "ffmpeg", "-y", "-i", raw_intro,
-            "-c:v", "libx264", "-crf", "24", "-preset", "veryfast",
-            "-b:v", "1500k", "-maxrate", "1800k", "-bufsize", "3000k",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-movflags", "+faststart", optimized_intro
-        ]
-        await asyncio.to_thread(subprocess.run, intro_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment**")
+        # Zero-CPU instant copy: intro.py already outputs standard faststart H.264
+        if os.path.exists(raw_intro):
+            shutil.copy2(raw_intro, optimized_intro)
 
-        # STEP 4: 7-DAY COMPARISON (Full-duration dynamic rendering + voice/SFX mix)
+        await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment**")
+        gc.collect()
+
+        # STEP 4: 7-DAY COMPARISON (Full duration + Capped 2-thread encode)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 7-Day Chart ({dur_comp:.1f}s)...")
         await status_msg.edit_text("📊 **4/6: Processing 7-Day Comparison Chart...**")
         
@@ -244,6 +243,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
 
         comp_sync_cmd = [
             "ffmpeg", "-y",
+            "-threads", "2",
             "-i", raw_comp,
             "-i", audio_comp,
             "-filter_complex",
@@ -252,15 +252,16 @@ async def execute_full_production(client: Client, message: Message, source: str)
             "[1:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_vox];"
             "[a_sfx][a_vox]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[aout]",
             "-map", "[v]", "-map", "[aout]",
-            "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+            "-c:v", "libx264", "-crf", "22", "-preset", "ultrafast",
             "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-t", str(dur_comp), "-movflags", "+faststart", synced_comp
         ]
         await asyncio.to_thread(subprocess.run, comp_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_comp, caption=f"📈 **7-Day Price Comparison** ({dur_comp:.1f}s)")
+        gc.collect()
 
-        # STEP 5: 22K PRICE CHART (Full-duration dynamic rendering + voice/SFX mix)
+        # STEP 5: 22K PRICE CHART (Full duration + Capped 2-thread encode)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 22K Price ({dur_price:.1f}s)...")
         await status_msg.edit_text("💎 **5/6: Processing Today's Rate Chart...**")
         
@@ -271,6 +272,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
 
         price_sync_cmd = [
             "ffmpeg", "-y",
+            "-threads", "2",
             "-i", raw_price,
             "-i", audio_price,
             "-filter_complex",
@@ -279,15 +281,16 @@ async def execute_full_production(client: Client, message: Message, source: str)
             "[1:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_vox];"
             "[a_sfx][a_vox]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[aout]",
             "-map", "[v]", "-map", "[aout]",
-            "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+            "-c:v", "libx264", "-crf", "22", "-preset", "ultrafast",
             "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-t", str(dur_price), "-movflags", "+faststart", synced_price
         ]
         await asyncio.to_thread(subprocess.run, price_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_price, caption=f"💎 **Today's Rate Segment** ({dur_price:.1f}s)")
+        gc.collect()
 
-        # STEP 6: SINGLE-PASS MASTER MERGE
+        # STEP 6: SINGLE-PASS MASTER MERGE (Optimized Ultrafast)
         GLOBAL_STATE.set_status("Merging", "Executing single-pass concatenation...")
         await status_msg.edit_text("🗜️ **6/6: Performing Master Video Assembly...**")
 
@@ -304,18 +307,20 @@ async def execute_full_production(client: Client, message: Message, source: str)
 
         master_cmd = [
             "ffmpeg", "-y",
+            "-threads", "2",
             "-i", optimized_intro,
             "-i", synced_comp,
             "-i", synced_price,
             "-filter_complex", concat_filter,
             "-map", "[vfinal]", "-map", "[afinal]",
-            "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+            "-c:v", "libx264", "-crf", "22", "-preset", "ultrafast",
             "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "160k",
             "-movflags", "+faststart",
             final_video_path
         ]
         await asyncio.to_thread(subprocess.run, master_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        gc.collect()
 
         if os.path.exists(final_video_path):
             file_mb = os.path.getsize(final_video_path) / (1024 * 1024)
@@ -334,6 +339,8 @@ async def execute_full_production(client: Client, message: Message, source: str)
         GLOBAL_STATE.log(f"Pipeline Crash: {e}")
         await status_msg.edit_text(f"❌ **Error:** `{e}`")
         GLOBAL_STATE.set_status("Error", str(e))
+    finally:
+        gc.collect()
 
 # ==========================================
 # 4. PYROGRAM BOT ROUTING
