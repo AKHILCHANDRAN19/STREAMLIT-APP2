@@ -2,6 +2,7 @@ import os
 import math
 import subprocess
 import wave
+import gc
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import cv2
@@ -210,7 +211,7 @@ def synthesize_comparison_sfx(output_path, total_duration, sample_rate=44100):
 # ==========================================
 def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     W, H = 1920, 1080
-    FPS = 30  # Standardized 30 FPS
+    FPS = 30
 
     effective_duration = float(duration_sec) if duration_sec and duration_sec > 1.0 else 7.5
     TOTAL_FRAMES = int(FPS * effective_duration)
@@ -371,10 +372,12 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
 
     output_path = output_override if output_override else os.path.join(VIDEOS_DIR, "sevenday_comparison.mp4")
 
+    # STRICT 2-THREAD LIMIT & DIRECT RGB24 PIPE (Bypasses cv2.cvtColor entirely)
     ffmpeg_cmd = [
         'ffmpeg', '-y',
+        '-threads', '2',
         '-f', 'rawvideo', '-vcodec', 'rawvideo', '-s', f'{W}x{H}',
-        '-pix_fmt', 'bgr24', '-r', str(FPS), '-i', '-',
+        '-pix_fmt', 'rgb24', '-r', str(FPS), '-i', '-',
         '-i', SFX_PATH,
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-crf', '20',
         '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
@@ -390,12 +393,12 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
         return output_path
 
     # ==================================================
-    # MAIN LOOP (Continuous active animations across all 44.4s)
+    # MAIN LOOP (Optimized Direct Pipe + Memory Safe)
     # ==================================================
     for frame in range(TOTAL_FRAMES):
         canvas = static_bg.copy()
 
-        # 1. Shadows
+        # 1. Shadows (Your Exact Live Alpha Math Kept 100% Intact)
         for i in range(7):
             start_f = 8 + i * 9
             if frame >= start_f:
@@ -409,7 +412,7 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 else:
                     canvas.paste(sh_patch, sh_pos, sh_patch)
 
-        # 2. Reflections
+        # 2. Reflections (Your Exact Live Alpha Math Kept 100% Intact)
         for i in range(7):
             start_f = 8 + i * 9
             if frame >= start_f + 5:
@@ -430,7 +433,6 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 step_idx = min(BAR_DUR, frame - start_f)
                 patch, pos, tc = cached_bar_sprites[i][step_idx]
 
-                # Breathing pulse once bars are raised
                 if frame > start_f + BAR_DUR:
                     bar_pulse = math.sin(frame * 0.08 + i * 0.9) * 2.5
                 else:
@@ -440,7 +442,7 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 canvas.paste(patch, (pos[0], pos_y), patch)
                 top_centers[i] = np.array([tc[0], tc[1] + bar_pulse])
 
-        # 4. Connecting Glowing Line & Infinite Traveling Light Orb (Never stops)
+        # 4. Connecting Glowing Line & Infinite Traveling Light Orb
         if frame > 70:
             trend_alpha = int(230 * clamp((frame - 70) / 25.0))
             active_pts = [tc for tc in top_centers if tc is not None]
@@ -451,8 +453,7 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 curve_pts = [tuple(p) for p in active_pts]
                 tr_draw.line(curve_pts, fill=(0, 180, 255, trend_alpha), width=3)
 
-                # Traveling orb with continuous modulo looping
-                travel_cycle = 75.0  # ~2.5s per cycle across all pillars
+                travel_cycle = 75.0
                 t_travel = ((frame - 70) % travel_cycle) / travel_cycle
                 seg_count = len(active_pts) - 1
                 pos_f = t_travel * seg_count
@@ -533,9 +534,12 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                     callout_draw.rounded_rectangle([bx, by, bx + card_w, by + card_h], radius=8, fill=b_fill, outline=b_border, width=2)
                     callout_draw.text((bx + 14, by + 6), badge_txt, fill=(255, 255, 255, badge_alpha), font=font_badge)
 
-        frame_rgb = canvas.convert('RGB')
-        frame_bgr = cv2.cvtColor(np.array(frame_rgb), cv2.COLOR_RGB2BGR)
-        ffmpeg_proc.stdin.write(frame_bgr.tobytes())
+        # FAST DIRECT-TO-PIPE STREAMING (Zero NumPy/OpenCV BGR conversion overhead)
+        ffmpeg_proc.stdin.write(canvas.convert('RGB').tobytes())
+
+        # Low-RAM Garbage Collection safeguard
+        if frame % 60 == 0:
+            gc.collect()
 
     ffmpeg_proc.stdin.close()
     ffmpeg_proc.wait()
