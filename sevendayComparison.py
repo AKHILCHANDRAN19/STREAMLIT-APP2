@@ -1,6 +1,7 @@
 import os
 import math
 import subprocess
+import wave
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import cv2
@@ -8,9 +9,21 @@ import datetime
 import re
 import scrapping
 
+# ==========================================
+# CONFIGURATION & REPO PATHS
+# ==========================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+VIDEOS_DIR = os.path.join(BASE_DIR, "Videos")
+AUDIOS_DIR = os.path.join(BASE_DIR, "Audios")
+FONTS_DIR = os.path.join(BASE_DIR, "Fonts")
+
+os.makedirs(VIDEOS_DIR, exist_ok=True)
+os.makedirs(AUDIOS_DIR, exist_ok=True)
+
+SFX_PATH = os.path.join(AUDIOS_DIR, "comp_sfx.wav")
+
 # --- Physics Easing ---
-def ease_out_back(t):
-    c1 = 1.70158
+def ease_out_back(t, c1=1.70158):
     c3 = c1 + 1.0
     return 1.0 + c3 * ((t - 1.0) ** 3) + c1 * ((t - 1.0) ** 2)
 
@@ -155,26 +168,75 @@ def fetch_and_prepare_dataset():
 
     return dataset
 
+# ==========================================
+# PROCEDURAL AUDIO SYNTHESIS FOR 7-DAY CHART
+# ==========================================
+def synthesize_comparison_sfx(output_path, total_duration, sample_rate=44100):
+    total_samples = int(total_duration * sample_rate)
+    left = np.zeros(total_samples, dtype=np.float32)
+    right = np.zeros(total_samples, dtype=np.float32)
+
+    # 1. Subtle Ascending Rising Shimmer (0.2s - 2.5s)
+    t_rise = np.linspace(0, 2.3, int(sample_rate * 2.3), endpoint=False)
+    freq_rise = np.linspace(220.0, 680.0, len(t_rise))
+    phase_rise = 2.0 * np.pi * np.cumsum(freq_rise) / sample_rate
+    shimmer = np.sin(phase_rise) * np.exp(-t_rise * 0.8) * 0.15
+
+    # 2. Spline Connect Bell Chime (at t = 2.5s)
+    t_bell = np.linspace(0, 1.4, int(sample_rate * 1.4), endpoint=False)
+    bell = (np.sin(2.0 * np.pi * 1046.5 * t_bell) * 0.4 + np.sin(2.0 * np.pi * 1568.0 * t_bell) * 0.25) * np.exp(-t_bell * 3.2) * 0.35
+
+    # 3. Soft Ambient Financial Pad (Underlying warm drone)
+    t_pad = np.linspace(0, total_duration, total_samples, endpoint=False)
+    pad = (np.sin(2.0 * np.pi * 110.0 * t_pad) * 0.08 + np.sin(2.0 * np.pi * 164.81 * t_pad) * 0.05)
+
+    idx_rise = int(0.2 * sample_rate)
+    left[idx_rise:idx_rise + len(shimmer)] += shimmer
+    right[idx_rise:idx_rise + len(shimmer)] += shimmer
+
+    idx_bell = int(2.5 * sample_rate)
+    if idx_bell + len(bell) < total_samples:
+        left[idx_bell:idx_bell + len(bell)] += bell
+        right[idx_bell:idx_bell + len(bell)] += bell
+
+    left += pad
+    right += pad
+
+    # Soft clip
+    left = (np.tanh(left) * 32767).astype(np.int16)
+    right = (np.tanh(right) * 32767).astype(np.int16)
+
+    interleaved = np.empty((left.size + right.size,), dtype=np.int16)
+    interleaved[0::2] = left
+    interleaved[1::2] = right
+
+    with wave.open(output_path, "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(interleaved.tobytes())
+
+
+# ==========================================
+# MASTER GRAPHICS & ANIMATION ENGINE
+# ==========================================
 def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     W, H = 1920, 1080
-    FPS = 60
-    DEFAULT_FRAMES = 330  # 5.5 Seconds baseline
+    FPS = 30  # Standardized 30 FPS for high performance and seamless app.py concat
 
-    if duration_sec:
-        TOTAL_FRAMES = max(DEFAULT_FRAMES, int(FPS * duration_sec))
-    else:
-        TOTAL_FRAMES = DEFAULT_FRAMES
+    # Dynamic duration support: animates continuously throughout the audio track
+    effective_duration = float(duration_sec) if duration_sec and duration_sec > 1.0 else 7.5
+    TOTAL_FRAMES = int(FPS * effective_duration)
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Synthesize background SFX track
+    synthesize_comparison_sfx(SFX_PATH, total_duration=effective_duration)
+
     font_paths = [
-        os.path.join(base_dir, "Fonts", "Roboto-Bold.ttf"),
-        os.path.join(base_dir, "Fonts", "Montserrat-Bold.ttf"),
-        os.path.join(base_dir, "Fonts", "Montserrat-ExtraBold.ttf"),
+        os.path.join(FONTS_DIR, "Montserrat-ExtraBold.ttf"),
+        os.path.join(FONTS_DIR, "Montserrat-Bold.ttf"),
+        os.path.join(FONTS_DIR, "Roboto-Bold.ttf"),
         "/system/fonts/Roboto-Bold.ttf",
-        "/system/fonts/Roboto-Regular.ttf",
-        "/system/fonts/DroidSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     ]
     font_path = next((p for p in font_paths if os.path.exists(p)), None)
 
@@ -190,7 +252,7 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     font_sub     = load_font(22)
     font_price   = load_font(44)
     font_change  = load_font(20)
-    font_badge   = load_font(18)
+    font_badge   = load_font(26)  # High-Impact 26px Bold Typography for Badges
 
     f_bar_day   = load_font(152)
     f_bar_month = load_font(116)
@@ -219,7 +281,7 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     color_up   = (30, 150, 60, 255)
     color_neu  = (120, 130, 145, 255)
 
-    print("\n[PRE-BAKING] Pre-computing individual dynamic assets...")
+    print(f"\n[Chart Engine] Pre-computing dynamic assets (Duration: {effective_duration:.1f}s | {TOTAL_FRAMES} frames)...")
 
     # 1. Static Studio Background with Header
     y_coords, x_coords = np.ogrid[:H, :W]
@@ -234,13 +296,13 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     static_bg = Image.fromarray(np.uint8(bg_arr), mode='RGB').convert('RGBA')
     h_draw = ImageDraw.Draw(static_bg)
     h_draw.text((80, 60), "22K PRICE COMPARISON", fill=(0, 108, 235, 255), font=font_title)
-    
+
     start_dt = f"{data[0]['month'].capitalize()} {data[0]['day']}, {data[0]['year']}"
     end_dt = f"{data[-1]['month'].capitalize()} {data[-1]['day']}, {data[-1]['year']}"
     desc = f"Last 7 Days Gold Rate Trend (per gram) • Kerala, India\nPeriod: {start_dt} - {end_dt}"
     h_draw.multiline_text((80, 128), desc, fill=(105, 115, 130, 255), font=font_sub, spacing=8)
 
-    # 2. Pre-bake Individual Shadow Patches (Per Bar, No Ghost Shadows)
+    # 2. Pre-bake Individual Shadow Patches
     individual_shadows = []
     for i in range(7):
         b = bases[i]
@@ -274,9 +336,9 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
         )
         precomputed_dates.append(layer)
 
-    # 4. Pre-bake Growth Steps & Individual Dynamic Reflections
-    BAR_DUR = 45
-    LINE_DUR = 25
+    # 4. Pre-bake Growth Steps & Dynamic Reflections (30 FPS optimized)
+    BAR_DUR = 25
+    LINE_DUR = 15
 
     cached_bar_sprites = [[] for _ in range(7)]
     individual_reflections = []
@@ -285,7 +347,7 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
         b = bases[i]
         for step in range(BAR_DUR + 1):
             t_bar = step / float(BAR_DUR)
-            h = max(0.0, data[i]["target_h"] * ease_out_back(t_bar))
+            h = max(0.0, data[i]["target_h"] * ease_out_back(t_bar, c1=1.4))
 
             p0 = b
             p1 = b + v_right
@@ -350,46 +412,38 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
     if output_override:
         output_path = output_override
     else:
-        out_dir = os.path.join(base_dir, "Videos")
-        os.makedirs(out_dir, exist_ok=True)
-        output_path = os.path.join(out_dir, "sevenday_comparison.mp4")
+        output_path = os.path.join(VIDEOS_DIR, "sevenday_comparison.mp4")
 
     ffmpeg_cmd = [
-        'ffmpeg',
-        '-y',
-        '-f', 'rawvideo',
-        '-vcodec', 'rawvideo',
-        '-s', f'{W}x{H}',
-        '-pix_fmt', 'bgr24',
-        '-r', str(FPS),
-        '-i', '-',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'fastdecode',
-        '-crf', '19',
-        '-threads', '2',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        output_path
+        'ffmpeg', '-y',
+        '-f', 'rawvideo', '-vcodec', 'rawvideo', '-s', f'{W}x{H}',
+        '-pix_fmt', 'bgr24', '-r', str(FPS), '-i', '-',
+        '-i', SFX_PATH,
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-crf', '20',
+        '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+        '-threads', '2', '-pix_fmt', 'yuv420p',
+        '-t', str(effective_duration),
+        '-movflags', '+faststart', output_path
     ]
 
     try:
         ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
-        print("[ERROR] FFmpeg is not found.")
+        print("[ERROR] FFmpeg not found.")
         return output_path
 
-    # Main Rendering Loop
+    # ==================================================
+    # MAIN RENDERING LOOP (Continuous dynamic animations)
+    # ==================================================
     for frame in range(TOTAL_FRAMES):
         canvas = static_bg.copy()
 
         # 1. Dynamic Contact Shadows
         for i in range(7):
-            start_f = 15 + i * 18
+            start_f = 8 + i * 9
             if frame >= start_f:
                 p_bar = clamp((frame - start_f) / float(BAR_DUR))
                 sh_alpha = clamp(p_bar * 1.4)
-
                 sh_patch, sh_pos = individual_shadows[i]
                 if sh_alpha < 1.0:
                     arr = np.array(sh_patch)
@@ -400,9 +454,9 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
 
         # 2. Dynamic Reflections
         for i in range(7):
-            start_f = 15 + i * 18
-            if frame >= start_f + 10:
-                p_refl = clamp((frame - (start_f + 10)) / float(BAR_DUR - 10))
+            start_f = 8 + i * 9
+            if frame >= start_f + 5:
+                p_refl = clamp((frame - (start_f + 5)) / float(BAR_DUR - 5))
                 refl_patch, refl_pos = individual_reflections[i]
                 if p_refl < 1.0:
                     arr = np.array(refl_patch)
@@ -411,19 +465,27 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 else:
                     canvas.paste(refl_patch, refl_pos, refl_patch)
 
-        # 3. 3D Bars (Back-to-Front Order: 7 -> 1)
+        # 3. 3D Bars with Continuous Floating Breathing Pulse
         top_centers = [None] * 7
         for i in reversed(range(7)):
-            start_f = 15 + i * 18
+            start_f = 8 + i * 9
             if frame >= start_f:
                 step_idx = min(BAR_DUR, frame - start_f)
                 patch, pos, tc = cached_bar_sprites[i][step_idx]
-                canvas.paste(patch, pos, patch)
-                top_centers[i] = tc
 
-        # 4. Connecting Glowing Spline & Continuous Looping Light Node
-        if frame > 140:
-            trend_alpha = int(220 * clamp((frame - 140) / 40.0))
+                # Organic out-of-phase floating breathing pulse
+                if frame > start_f + BAR_DUR:
+                    bar_pulse = math.sin(frame * 0.08 + i * 0.9) * 2.5
+                else:
+                    bar_pulse = 0.0
+
+                pos_y = int(pos[1] + bar_pulse)
+                canvas.paste(patch, (pos[0], pos_y), patch)
+                top_centers[i] = np.array([tc[0], tc[1] + bar_pulse])
+
+        # 4. Connecting Glowing Trend Line & Infinite Moving Light Orb
+        if frame > 70:
+            trend_alpha = int(230 * clamp((frame - 70) / 25.0))
             active_pts = [tc for tc in top_centers if tc is not None]
             if len(active_pts) >= 2:
                 trend_layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
@@ -432,27 +494,33 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 curve_pts = [tuple(p) for p in active_pts]
                 tr_draw.line(curve_pts, fill=(0, 180, 255, trend_alpha), width=3)
 
-                # Continuous modulo animation: never stops even if audio is 20+ seconds
-                pulse_t = ((frame - 140) * 0.04) % 1.0
-                pulse_idx = int(pulse_t * (len(active_pts) - 1))
-                if pulse_idx < len(active_pts) - 1:
-                    pA = active_pts[pulse_idx]
-                    pB = active_pts[pulse_idx + 1]
-                    sub_t = (pulse_t * (len(active_pts) - 1)) - pulse_idx
-                    pulse_pos = pA * (1.0 - sub_t) + pB * sub_t
-                    tr_draw.ellipse([pulse_pos[0]-8, pulse_pos[1]-8, pulse_pos[0]+8, pulse_pos[1]+8], fill=(255, 255, 255, trend_alpha))
-                    tr_draw.ellipse([pulse_pos[0]-14, pulse_pos[1]-14, pulse_pos[0]+14, pulse_pos[1]+14], outline=(120, 220, 255, int(trend_alpha * 0.5)), width=2)
+                # Continuous infinite traveling light orb (Never stops throughout the whole video)
+                travel_cycle = 75.0  # ~2.5s loop cycle across all 7 pillars
+                t_travel = ((frame - 70) % travel_cycle) / travel_cycle
+                seg_count = len(active_pts) - 1
+                pos_f = t_travel * seg_count
+                curr_idx = min(seg_count - 1, int(pos_f))
+                sub_t = pos_f - curr_idx
+
+                pA = active_pts[curr_idx]
+                pB = active_pts[curr_idx + 1]
+                pulse_pos = pA * (1.0 - sub_t) + pB * sub_t
+
+                # Dynamic outer glowing aura + bright core
+                tr_draw.ellipse([pulse_pos[0]-18, pulse_pos[1]-18, pulse_pos[0]+18, pulse_pos[1]+18], fill=(0, 160, 255, int(trend_alpha * 0.35)))
+                tr_draw.ellipse([pulse_pos[0]-11, pulse_pos[1]-11, pulse_pos[0]+11, pulse_pos[1]+11], fill=(120, 220, 255, int(trend_alpha * 0.75)))
+                tr_draw.ellipse([pulse_pos[0]-6, pulse_pos[1]-6, pulse_pos[0]+6, pulse_pos[1]+6], fill=(255, 255, 255, trend_alpha))
 
                 canvas.alpha_composite(trend_layer)
 
-        # 5. Progressive Callouts & Digital Price Ticker
+        # 5. Progressive Callouts & Pulsing Price Tickers
         callout_draw = ImageDraw.Draw(canvas)
         for i in range(7):
             tc = top_centers[i]
             if tc is None:
                 continue
 
-            line_start_f = 15 + i * 18 + 25
+            line_start_f = 8 + i * 9 + 12
             p_line = clamp((frame - line_start_f) / float(LINE_DUR))
             if p_line <= 0:
                 continue
@@ -478,29 +546,44 @@ def generate_perfect_fast_animation(duration_sec=None, output_override=None):
                 curr_val = int(10000 + (data[i]["price_int"] - 10000) * text_t)
                 price_str = f"₹{curr_val:,}"
 
+                # Continuous heartbeat pulse on active numbers
+                if frame > line_start_f + LINE_DUR:
+                    num_pulse = math.sin(frame * 0.1 + i) * 1.5
+                else:
+                    num_pulse = 0.0
+
                 txt_alpha = int(255 * text_t)
-                callout_draw.text((pt_end[0], pt_elbow[1] - 52), price_str, fill=(0, 108, 235, txt_alpha), font=font_price)
+                callout_draw.text((pt_end[0], pt_elbow[1] - 52 + num_pulse), price_str, fill=(0, 108, 235, txt_alpha), font=font_price)
 
                 c_color = color_down if data[i]["chg_type"] == "down" else (color_up if data[i]["chg_type"] == "up" else color_neu)
                 c_color_a = (c_color[0], c_color[1], c_color[2], txt_alpha)
-                callout_draw.text((pt_end[0] + 4, pt_elbow[1] + 8), f"({data[i]['change']})", fill=c_color_a, font=font_change)
+                callout_draw.text((pt_end[0] + 4, pt_elbow[1] + 8 + num_pulse), f"({data[i]['change']})", fill=c_color_a, font=font_change)
 
-        # 6. Week High / Low Badges with Continuous Breathing Pulse
-        if frame > 200:
-            badge_alpha = int(255 * clamp((frame - 200) / 30.0))
-            pulse = math.sin((frame - 200) * 0.12) * 3.5
+        # 6. High-Impact, Prominent WEEK HIGH / LOW Badges
+        if frame > 80:
+            badge_alpha = int(255 * clamp((frame - 80) / 20.0))
+            badge_float = math.sin((frame - 80) * 0.1) * 4.0
 
             badge_indices = [idx for idx in range(7) if data[idx]["badge"] is not None]
             for i in badge_indices:
                 tc = top_centers[i]
                 if tc is not None:
                     badge_txt = data[i]["badge"]
-                    b_color = (235, 140, 0, badge_alpha) if badge_txt == "WEEK HIGH" else (210, 45, 45, badge_alpha)
+                    is_high = (badge_txt == "WEEK HIGH")
 
-                    bx = tc[0] - 120 if badge_txt == "WEEK LOW" else tc[0] - 130
-                    by = tc[1] - 170 + pulse
-                    callout_draw.rounded_rectangle([bx, by, bx + 115, by + 28], radius=6, fill=b_color)
-                    callout_draw.text((bx + 8, by + 4), badge_txt, fill=(255, 255, 255, badge_alpha), font=font_badge)
+                    b_fill = (235, 135, 0, badge_alpha) if is_high else (215, 35, 35, badge_alpha)
+                    b_border = (255, 210, 100, badge_alpha) if is_high else (255, 120, 120, badge_alpha)
+
+                    card_w, card_h = 175, 42
+                    bx = tc[0] - 165 if not is_high else tc[0] - 175
+                    by = tc[1] - 175 + badge_float
+
+                    # Drop shadow
+                    callout_draw.rounded_rectangle([bx + 2, by + 4, bx + card_w + 2, by + card_h + 4], radius=8, fill=(0, 20, 40, int(badge_alpha * 0.35)))
+                    # Main Pill Card
+                    callout_draw.rounded_rectangle([bx, by, bx + card_w, by + card_h], radius=8, fill=b_fill, outline=b_border, width=2)
+                    # Bold Text centered
+                    callout_draw.text((bx + 14, by + 6), badge_txt, fill=(255, 255, 255, badge_alpha), font=font_badge)
 
         # Stream Frame to FFmpeg
         frame_rgb = canvas.convert('RGB')
