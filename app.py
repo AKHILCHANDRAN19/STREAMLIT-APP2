@@ -20,6 +20,7 @@ import tts
 import script
 import sevendayComparison
 import price_22k
+import yt_metadata
 
 # ==========================================
 # 1. STREAMLIT UI & TELEMETRY
@@ -225,7 +226,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         raw_intro = os.path.join(videos_dir, "intro.mp4")
         optimized_intro = os.path.join(videos_dir, f"intro_opt_{ts}.mp4")
 
-        # Zero-CPU instant copy: intro.py already outputs standard faststart H.264
+        # Instant copy: intro.py already outputs standard faststart H.264
         if os.path.exists(raw_intro):
             shutil.copy2(raw_intro, optimized_intro)
 
@@ -281,7 +282,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
             "[1:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_vox];"
             "[a_sfx][a_vox]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[aout]",
             "-map", "[v]", "-map", "[aout]",
-            "-c:v", "libx264", "-crf", "22", "-preset", "ultrafast",
+            "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
             "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-t", str(dur_price), "-movflags", "+faststart", synced_price
@@ -330,6 +331,18 @@ async def execute_full_production(client: Client, message: Message, source: str)
                 caption=f"🥇 **{final_video_name}**\n📅 `{date_label}`\n🏛️ Source: `{source.upper()}`\n📦 Size: `{file_mb:.1f} MB`"
             )
             await status_msg.delete()
+
+            # --- SENDS 3 COPYABLE METADATA MESSAGES (WITH ACCURATE TIMESTAMPS) ---
+            intro_duration = yt_metadata.get_media_duration(optimized_intro)
+            await yt_metadata.send_youtube_metadata(
+                client=client,
+                chat_id=message.chat.id,
+                dt=now,
+                intro_dur=intro_duration,
+                comp_dur=dur_comp,
+                include_timestamps=True
+            )
+
             GLOBAL_STATE.set_status("Idle", "Master production complete.")
             GLOBAL_STATE.log(f"Production Complete: {final_video_name} ({file_mb:.1f} MB)")
         else:
@@ -366,7 +379,8 @@ async def run_bot():
                 "• `/priceakg` — 3D Daily Rate Video (AKGSMA)\n"
                 "• `/pricegd` — 3D Daily Rate Video (GoodReturns)\n"
                 "• `/gencomp` — 3D 7-Day Comparison Video\n\n"
-                "**Utilities:**\n"
+                "**Utilities & Metadata:**\n"
+                "• `/ytmetadata` — YouTube Titles, Description & Tags\n"
                 "• `/scriptakg` — Audio Script (AKGSMA)\n"
                 "• `/scriptgd` — Audio Script (GoodReturns)\n"
                 "• `/scrapeakg` — Market Rates (AKGSMA)\n"
@@ -413,6 +427,17 @@ async def run_bot():
             if vid_path and os.path.exists(vid_path):
                 await client.send_video(chat_id=message.chat.id, video=vid_path, caption="📈 **7-Day Price Comparison**")
                 await status_msg.delete()
+
+        # Standalone YouTube Metadata command (NO timestamps, since no video generated)
+        @app.on_message(filters.command(["ytmetadata", "ytmeta"]) & filters.private)
+        async def handle_ytmetadata(client: Client, message: Message):
+            now = datetime.now(IST_TIMEZONE)
+            await yt_metadata.send_youtube_metadata(
+                client=client,
+                chat_id=message.chat.id,
+                dt=now,
+                include_timestamps=False
+            )
 
         @app.on_message(filters.command("scriptakg") & filters.private)
         async def handle_scriptakg(client: Client, message: Message):
