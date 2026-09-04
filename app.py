@@ -92,6 +92,11 @@ def combine_wav_files(input_paths, output_path, pause_duration=0.25):
                 out_wf.writeframes(chunk)
 
 def split_script_into_chunks(raw_text: str):
+    """
+    Splits the script cleanly:
+    - Part 1 (Comparison) is split on natural paragraph breaks without dropping text.
+    - Part 2 (Today's Price) is kept as 1 COMPLETE single unit so it never cuts off.
+    """
     parts = raw_text.split("━━━━━━━━━━━━━━━━━━━━━━━━━")
     
     # 1. 7-Day Comparison (Part 1)
@@ -110,21 +115,12 @@ def split_script_into_chunks(raw_text: str):
         else:
             comp_chunks.append("കഴിഞ്ഞ ഒരാഴ്ചത്തെ " + rest.strip())
     else:
-        sentences = [s.strip() for s in re.split(r"[.!?]", comp_clean) if len(s.strip()) > 5]
-        comp_chunks = sentences[:3] if len(sentences) >= 3 else [comp_clean]
+        comp_chunks = [comp_clean] if comp_clean else []
 
-    # 2. Today's Price (Part 2)
+    # 2. Today's Price (Part 2) - NEVER sliced or truncated!
     price_raw = parts[2] if len(parts) > 2 else ""
     price_clean = re.sub(r"[*_━#()|]", "", price_raw).strip()
-
-    price_chunks = []
-    if "ഇതോടെ" in price_clean:
-        p1, p2 = price_clean.split("ഇതോടെ", 1)
-        price_chunks.append(p1.strip())
-        price_chunks.append("ഇതോടെ " + p2.strip())
-    else:
-        sentences = [s.strip() for s in re.split(r"[.!?]", price_clean) if len(s.strip()) > 5]
-        price_chunks = sentences[:2] if len(sentences) >= 2 else [price_clean]
+    price_chunks = [price_clean] if price_clean else []
 
     return comp_chunks, price_chunks
 
@@ -167,7 +163,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await message.reply_text(formatted_script)
         GLOBAL_STATE.log(f"Script sent for {source}.")
 
-        # STEP 2: CONCURRENT PARALLEL TTS (10-12s Total)
+        # STEP 2: CONCURRENT PARALLEL TTS
         GLOBAL_STATE.set_status("TTS", "Synthesizing voiceovers concurrently...")
         await status_msg.edit_text("🎙️ **2/6: Synthesizing Split Voiceovers in Parallel...**")
         comp_chunks, price_chunks = split_script_into_chunks(formatted_script)
@@ -202,7 +198,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await client.send_audio(chat_id=message.chat.id, audio=audio_price, caption=f"🎙️ **Today's Rate Voiceover** ({dur_price:.1f}s)")
         GLOBAL_STATE.log(f"Voiceovers ready. Comp: {dur_comp:.1f}s | Price: {dur_price:.1f}s")
 
-        # STEP 3: 3D INTRO VIDEO (Compresses to ~2MB with faststart directly in app.py)
+        # STEP 3: 3D INTRO VIDEO
         GLOBAL_STATE.set_status("Rendering", "Rendering 3D Intro Video...")
         await status_msg.edit_text("🎬 **3/6: Rendering 3D Intro Video...**")
         await asyncio.to_thread(intro.main)
@@ -220,17 +216,15 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, intro_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment**")
 
-        # STEP 4: 7-DAY COMPARISON (Full-Duration Dynamic Rendering + Voice/SFX Mix)
+        # STEP 4: 7-DAY COMPARISON (Continuous dynamic rendering + voice/SFX mix)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 7-Day Chart ({dur_comp:.1f}s)...")
         await status_msg.edit_text("📊 **4/6: Processing 7-Day Comparison Chart...**")
         
-        # Pass duration_sec=dur_comp so animations run continuously across all seconds
         raw_comp = await asyncio.to_thread(sevendayComparison.main, duration_sec=dur_comp)
 
         synced_comp = os.path.join(videos_dir, f"comp_synced_{ts}.mp4")
         fade_st_1 = max(0.1, dur_comp - 0.6)
 
-        # Mix chart SFX (0:a) and Malayalam Voiceover (1:a) cleanly
         comp_sync_cmd = [
             "ffmpeg", "-y",
             "-i", raw_comp,
@@ -249,7 +243,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, comp_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_comp, caption=f"📈 **7-Day Price Comparison** ({dur_comp:.1f}s)")
 
-        # STEP 5: 22K PRICE CHART (Runs in 2s, Extended via Native FFmpeg Filter)
+        # STEP 5: 22K PRICE CHART
         GLOBAL_STATE.set_status("Rendering", f"Rendering 22K Price ({dur_price:.1f}s)...")
         await status_msg.edit_text("💎 **5/6: Processing Today's Rate Chart...**")
         raw_price = await asyncio.to_thread(price_22k.main, source=source)
@@ -271,7 +265,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, price_sync_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=synced_price, caption=f"💎 **Today's Rate Segment** ({dur_price:.1f}s)")
 
-        # STEP 6: SINGLE-PASS MASTER MERGE (Clean Concat Under 8 MB)
+        # STEP 6: SINGLE-PASS MASTER MERGE
         GLOBAL_STATE.set_status("Merging", "Executing single-pass concatenation...")
         await status_msg.edit_text("🗜️ **6/6: Performing Master Video Assembly...**")
 
