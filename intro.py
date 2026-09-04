@@ -33,8 +33,7 @@ FONT_MONT_EBOLD = os.path.join(FONTS_DIR, "Montserrat-ExtraBold.ttf")
 
 WIDTH, HEIGHT = 1920, 1080
 FPS = 30
-TOTAL_DURATION = 11.5  # 4.5s (Channel Name) + 3.5s (Like & Sub) + 3.5s (WhatsApp)
-TOTAL_FRAMES = int(FPS * TOTAL_DURATION)
+DEFAULT_DURATION = 11.5
 
 
 # ==========================================
@@ -60,10 +59,10 @@ def ease_in_cubic(t):
 
 
 # ==========================================
-# 1. PROCEDURAL SOUND SYNTHESIS
+# 1. AUDIO DETECTION & SFX SYNTHESIZER
 # ==========================================
-def get_random_prebuilt_audio():
-    """Detects any user background audio in Audios/, ignoring generated temp files."""
+def get_random_prebuilt_audio_and_duration():
+    """Finds user pre-built audio and reads its exact duration to prevent mid-sentence cut-offs."""
     valid_exts = (".wav", ".mp3", ".m4a", ".aac")
     audio_files = [
         f for f in glob.glob(os.path.join(AUDIOS_DIR, "*"))
@@ -71,16 +70,30 @@ def get_random_prebuilt_audio():
         and not os.path.basename(f).startswith(("intro_sfx", "intro_master_mixed", "comp_", "price_", "master_"))
     ]
     if not audio_files:
-        return None
-    return random.choice(audio_files)
+        return None, DEFAULT_DURATION
 
-def synthesize_sfx_track(output_path, total_duration=TOTAL_DURATION, sample_rate=44100):
-    """
-    Synthesizes the standalone SFX track:
-    - 0.8s: Cinematic Sub-Impact + Punch
-    - 4.5s: Crystal Pop & Chime
-    - 8.0s: WhatsApp Glass Ping
-    """
+    selected = random.choice(audio_files)
+    duration = DEFAULT_DURATION
+
+    try:
+        if selected.lower().endswith(".wav"):
+            with wave.open(selected, "rb") as wf:
+                duration = wf.getnframes() / float(wf.getframerate())
+        else:
+            # Fallback probe via ffprobe if MP3/M4A
+            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", selected]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            duration = float(res.stdout.strip())
+    except Exception as e:
+        print(f"      [Audio Engine] Notice probing audio duration: {e}")
+
+    # Ensure minimum 11.5s so all visual stages display completely
+    final_duration = max(11.5, duration)
+    return selected, final_duration
+
+
+def synthesize_sfx_track(output_path, total_duration, sample_rate=44100):
+    """Synthesizes the standalone SFX track for the exact length of the video."""
     total_samples = int(total_duration * sample_rate)
     left = np.zeros(total_samples, dtype=np.float32)
     right = np.zeros(total_samples, dtype=np.float32)
@@ -117,7 +130,6 @@ def synthesize_sfx_track(output_path, total_duration=TOTAL_DURATION, sample_rate
     glass_tap = np.sin(2.0 * np.pi * 420.0 * t3) * np.exp(-t3 * 30.0) * 0.25
     inject_sfx(8.0, (ping * 0.8 + glass_tap) * 0.85, (ping * 0.75 + glass_tap) * 0.80)
 
-    # Soft limit to prevent any clipping
     left = np.tanh(left) * 0.92
     right = np.tanh(right) * 0.92
 
@@ -154,6 +166,7 @@ def create_cinematic_dark_blue_bg(w, h):
     bg = np.dstack((b, g, r))
     return cv2.GaussianBlur(bg, (45, 45), 0)
 
+
 def render_gold_text_layer():
     text = "KERALA GOLD DESK"
     font_size = 180
@@ -173,7 +186,6 @@ def render_gold_text_layer():
     layer_w, layer_h = int(t_w + pad_x * 2), int(t_h + pad_y * 2)
     cx, cy = layer_w // 2, layer_h // 2 - 15
 
-    # Original metallic gold gradient
     gold_grad = np.zeros((layer_h, layer_w, 4), dtype=np.uint8)
     for y in range(layer_h):
         t = y / max(1, layer_h - 1)
@@ -316,9 +328,13 @@ def overlay_bgra(bg, overlay, x, y):
 # 4. MASTER COMPOSITING PIPELINE
 # ==========================================
 def main():
-    log_step(1, 6, "Synthesizing custom cinematic SFX and scanning audio assets...")
+    log_step(1, 6, "Probing pre-built audio duration...")
+    prebuilt_audio, audio_duration = get_random_prebuilt_audio_and_duration()
+    TOTAL_DURATION = audio_duration
+    TOTAL_FRAMES = int(FPS * TOTAL_DURATION)
+    log_step(1, 6, f"Matched Video Duration to Audio: {TOTAL_DURATION:.2f}s ({TOTAL_FRAMES} frames)")
+
     synthesize_sfx_track(SFX_PATH, total_duration=TOTAL_DURATION)
-    prebuilt_audio = get_random_prebuilt_audio()
 
     bg_base = create_cinematic_dark_blue_bg(WIDTH, HEIGHT)
     log_step(2, 6, "Loading channel logo with 3D drop shadows...")
@@ -331,14 +347,13 @@ def main():
 
     logo_base = add_drop_shadow(logo_raw, blur=41, opacity=0.8)
 
-    log_step(3, 6, "Extracting exact original pixel cloud from gold typography...")
+    log_step(3, 6, "Extracting original pixel disintegration cloud from gold typography...")
     gold_text_layer = render_gold_text_layer()
 
-    # ORIGINAL 1x1 Disintegration Particles Setup
     alpha = gold_text_layer[:, :, 3]
     y_idx, x_idx = np.where(alpha > 35)
     total_px = len(x_idx)
-    colors = gold_text_layer[y_idx, x_idx, :3]  # Exact original pixel colors
+    colors = gold_text_layer[y_idx, x_idx, :3]
 
     title_x = WIDTH // 2 - gold_text_layer.shape[1] // 2
     title_y = 150
@@ -352,21 +367,20 @@ def main():
     vy = np.random.uniform(-5.5, 2.0, total_px).astype(np.float32)
     gravity = np.random.uniform(0.95, 1.65, total_px).astype(np.float32)
 
-    log_step(4, 6, "Compositing UI cards (Like, Subscribe, WhatsApp)...")
+    log_step(4, 6, "Compositing UI cards...")
     like_overlay = prepare_like_icon()
     sub_overlay = prepare_subscribe_button()
     wa_overlay = create_whatsapp_banner()
 
-    log_step(5, 6, "Configuring FFmpeg dual-audio mixing & video stream...")
+    log_step(5, 6, "Streaming to FFmpeg encoder...")
     ffmpeg_cmd = [
         "ffmpeg", "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo", "-s", f"{WIDTH}x{HEIGHT}",
         "-pix_fmt", "bgr24", "-r", str(FPS), "-i", "-"
     ]
 
-    # Robust native FFmpeg audio mixing: Handles any bit-depth/format without dropping
     if prebuilt_audio and os.path.exists(prebuilt_audio):
-        log_step(5, 6, f"Layering SFX onto pre-built audio: {os.path.basename(prebuilt_audio)}")
+        log_step(5, 6, f"Layering SFX onto: {os.path.basename(prebuilt_audio)}")
         ffmpeg_cmd.extend([
             "-i", prebuilt_audio,
             "-i", SFX_PATH,
@@ -377,7 +391,6 @@ def main():
             "-map", "0:v", "-map", "[aout]"
         ])
     else:
-        log_step(5, 6, "No pre-built audio found in Audios/ — using standalone SFX track.")
         ffmpeg_cmd.extend([
             "-i", SFX_PATH,
             "-map", "0:v", "-map", "1:a"
@@ -394,7 +407,6 @@ def main():
     process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
     start_time = time.time()
 
-    # ORIGINAL Ambient Background Particles (exact color & size as original)
     np.random.seed(99)
     env_particles = 1500
     sp_x = np.random.uniform(-100, WIDTH + 100, env_particles)
@@ -402,12 +414,12 @@ def main():
     sp_vx = np.random.uniform(-1.5, 1.5, env_particles)
     sp_vy = np.random.uniform(0.5, 3.5, env_particles)
 
-    gold_shades = [(60, 210, 245), (30, 180, 255), (10, 140, 220)]  # Original colors
+    gold_shades = [(60, 210, 245), (30, 180, 255), (10, 140, 220)]
     sp_color_idx = np.random.randint(0, 3, env_particles)
-    sp_sizes = np.random.randint(2, 5, env_particles)  # Original sizes
+    sp_sizes = np.random.randint(2, 5, env_particles)
 
     # ==================================================
-    # FRAME RENDER LOOP (Total: 11.5s = 345 frames)
+    # MASTER RENDER LOOP (Full Duration)
     # ==================================================
     for frame_idx in range(TOTAL_FRAMES):
         t = frame_idx / FPS
@@ -477,7 +489,7 @@ def main():
                 sw_p = (t - 0.75) / 0.65
                 cv2.circle(frame, (WIDTH//2, logo_center_y - 80), int(150 + sw_p * 850), (40, 195, 235), max(1, int(18 * (1.0 - sw_p))))
 
-        # ORIGINAL 1x1 Pixel Disintegration (3.8s to 4.5s -> clears completely at 4.5s)
+        # 1x1 Pixel Disintegration (3.8s to 4.5s -> clears completely at 4.5s)
         elif 3.8 <= t < 4.5:
             dt = t - 3.8
             l_fade = max(0.0, 1.0 - dt * 2.2)
@@ -491,7 +503,6 @@ def main():
             cur_py = p_y + vy * (dt * 32.0) + 0.5 * gravity * ((dt * 32.0) ** 2)
             valid = (cur_px >= 0) & (cur_px < WIDTH) & (cur_py >= 0) & (cur_py < HEIGHT)
             idx_v = np.where(valid)[0]
-            # Exact original pixel assignment
             frame[cur_py[idx_v].astype(np.int32), cur_px[idx_v].astype(np.int32)] = colors[idx_v]
 
         # --------------------------------------------------
@@ -524,13 +535,14 @@ def main():
                 overlay_bgra(frame, cv2.resize(sub_overlay, (w_sub, h_sub)), sub_x, sub_y)
 
         # --------------------------------------------------
-        # STAGE 3: STANDALONE WHATSAPP BANNER (8.0s – 11.5s -> Exactly 3.5s)
+        # STAGE 3: WHATSAPP BANNER (8.0s – End of Full Audio Duration)
         # --------------------------------------------------
         elif t >= 8.0:
             t_stage = t - 8.0
             prog = min(1.0, t_stage / 0.6)
             scale_wa = ease_out_back(prog, overshoot=1.3)
 
+            # Stays on screen with subtle breathing until the entire audio sentence finishes
             if t_stage > 0.6:
                 scale_wa *= (1.0 + 0.015 * math.sin((t_stage - 0.6) * 6.0))
 
