@@ -1,6 +1,5 @@
 import asyncio
 import websockets
-import requests
 import json
 import base64
 import uuid
@@ -8,6 +7,7 @@ import wave
 import os
 import time
 import numpy as np
+from curl_cffi import requests
 
 try:
     import streamlit as st
@@ -104,7 +104,7 @@ async def generate_audio_gemini(text, api_key, output_filename=None):
         save_gemini_wave(file_path, audio_data, orig_rate=24000, target_rate=44100)
         return file_path
     except Exception as e:
-        print(f"❌ Gemini TTS failed on key [{masked_key}]: {e}")
+        print(f"❌ Gemini TTS failed on key [{masked_key}]: {e}", flush=True)
         return None
 
 def get_cartesia_public_token():
@@ -113,22 +113,34 @@ def get_cartesia_public_token():
     if CACHED_CARTESIA_TOKEN and now < TOKEN_EXPIRY:
         return CACHED_CARTESIA_TOKEN
 
+    # Allow direct API key if present in Streamlit secrets or env
+    if st and hasattr(st, "secrets") and "CARTESIA_API_KEY" in st.secrets:
+        return st.secrets["CARTESIA_API_KEY"].strip()
+    if os.environ.get("CARTESIA_API_KEY"):
+        return os.environ.get("CARTESIA_API_KEY").strip()
+
+    # Use curl_cffi with Chrome 120 impersonation to bypass Cloudflare 403 on AWS IPs
     url = "https://backend.cartesia.ai/access-token/public"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-        "Referer": "https://cartesia.ai/languages/malayalam"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Referer": "https://cartesia.ai/languages/malayalam",
+        "Origin": "https://cartesia.ai",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        token = data.get("token", data.get("access_token"))
-        if token:
-            CACHED_CARTESIA_TOKEN = token
-            TOKEN_EXPIRY = now + 900
-        return token
+        res = requests.get(url, headers=headers, impersonate="chrome120", timeout=12)
+        if res.status_code == 200:
+            data = res.json()
+            token = data.get("token", data.get("access_token"))
+            if token:
+                CACHED_CARTESIA_TOKEN = token
+                TOKEN_EXPIRY = now + 900  # 15 minutes
+                return token
+        print(f"⚠️ Cartesia token request returned status {res.status_code}", flush=True)
+        return None
     except Exception as e:
-        print(f"❌ Failed to obtain Cartesia token: {e}")
+        print(f"❌ Failed to obtain Cartesia token via curl_cffi: {e}", flush=True)
         return None
 
 async def generate_audio_cartesia(text, token, output_filename=None):
@@ -150,7 +162,7 @@ async def generate_audio_cartesia(text, token, output_filename=None):
     }
 
     try:
-        async with websockets.connect(ws_url) as ws:
+        async with websockets.connect(ws_url, close_timeout=10) as ws:
             await ws.send(json.dumps(payload))
             audio_buffer = bytearray()
             while True:
@@ -167,29 +179,34 @@ async def generate_audio_cartesia(text, token, output_filename=None):
                         wav_file.writeframes(audio_buffer)
                     return file_path
                 elif response.get("type") == "error":
-                    print(f"\n❌ Cartesia Error: {response.get('error')}")
+                    print(f"❌ Cartesia Error: {response.get('error')}", flush=True)
                     return None
     except Exception as e:
-        print(f"\n❌ Cartesia Connection Error: {e}")
+        print(f"❌ Cartesia WebSocket Error: {e}", flush=True)
         return None
 
 async def generate_speech(text, output_filename=None):
-    """Synthesizes text, trying all Gemini keys in rotation before falling back to Cartesia."""
+    """
+    Synthesizes speech:
+    1. Iterates through ALL available Gemini API keys in rotation.
+    2. Falls back to Cartesia with Cloudflare-bypassed token fetching.
+    """
     gemini_keys = get_gemini_api_keys()
 
     if gemini_keys and genai:
-        # Loop through every key in the rotation pool if one fails
+        # Try every single key before abandoning Gemini
         for _ in range(len(gemini_keys)):
             current_key = get_next_gemini_key(gemini_keys)
             audio_path = await generate_audio_gemini(text, current_key, output_filename)
-            if audio_path and os.path.exists(audio_path):
+            if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
                 return audio_path
 
-    # Fallback to Cartesia if all Gemini keys fail
+    # Fallback to Cartesia
     token = get_cartesia_public_token()
     if token:
         audio_path = await generate_audio_cartesia(text, token, output_filename)
-        if audio_path and os.path.exists(audio_path):
+        if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
             return audio_path
 
+    print(f"🚨 CRITICAL: All TTS synthesis providers failed for text chunk: '{text[:30]}...'", flush=True)
     return None
