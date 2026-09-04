@@ -5,8 +5,6 @@ import time
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-import random
-import glob
 import wave
 import gc
 
@@ -20,17 +18,21 @@ AUDIOS_DIR = os.path.join(BASE_DIR, "Audios")
 VIDEOS_DIR = os.path.join(BASE_DIR, "Videos")
 
 os.makedirs(VIDEOS_DIR, exist_ok=True)
+os.makedirs(AUDIOS_DIR, exist_ok=True)
 
 LOGO_PATH = os.path.join(IMAGES_DIR, "channel-logo.png")
 LIKE_IMG_PATH = os.path.join(IMAGES_DIR, "Like.png")
 SUB_IMG_PATH = os.path.join(IMAGES_DIR, "Subscribe.png")
 WA_IMG_PATH = os.path.join(IMAGES_DIR, "Whatsapp.png")
-OUTPUT_PATH = os.path.join(VIDEOS_DIR, "intro.mp4")
 
+OUTPUT_PATH = os.path.join(VIDEOS_DIR, "intro.mp4")
+SFX_PATH = os.path.join(AUDIOS_DIR, "intro_sfx.wav")
 FONT_MONT_EBOLD = os.path.join(FONTS_DIR, "Montserrat-ExtraBold.ttf")
 
 WIDTH, HEIGHT = 1920, 1080
 FPS = 30
+TOTAL_DURATION = 11.5  # 4.5s (Channel Name) + 3.5s (Like & Sub) + 3.5s (WhatsApp)
+TOTAL_FRAMES = int(FPS * TOTAL_DURATION)
 
 
 # ==========================================
@@ -47,7 +49,7 @@ def get_font(path, size):
             pass
     return ImageFont.load_default()
 
-def ease_out_back(t, overshoot=1.55):
+def ease_out_back(t, overshoot=1.45):
     t -= 1.0
     return t * t * ((overshoot + 1.0) * t + overshoot) + 1.0
 
@@ -56,7 +58,90 @@ def ease_in_cubic(t):
 
 
 # ==========================================
-# 1. BACKGROUND & TEXT RENDERING
+# 1. PROCEDURAL SOUND SYNTHESIZER (WAVE + NUMPY)
+# ==========================================
+def synthesize_intro_audio(output_path, total_duration=TOTAL_DURATION, sample_rate=44100):
+    """
+    Synthesizes custom cinematic sound effects natively into a 16-bit 44.1kHz stereo WAV:
+    1. Cinematic Sub-Bass Impact (t = 0.8s) when the name hits the background.
+    2. Whoosh + Pop Chime (t = 4.5s) when Like & Subscribe pop up.
+    3. Modern Glass Notification Ping (t = 8.0s) for WhatsApp.
+    """
+    total_samples = int(total_duration * sample_rate)
+    left = np.zeros(total_samples, dtype=np.float32)
+    right = np.zeros(total_samples, dtype=np.float32)
+
+    # Helper: inject stereo sound at specific timestamp
+    def inject_sfx(start_sec, sfx_left, sfx_right):
+        start_idx = int(start_sec * sample_rate)
+        end_idx = min(total_samples, start_idx + len(sfx_left))
+        valid_len = end_idx - start_idx
+        if valid_len > 0:
+            left[start_idx:end_idx] += sfx_left[:valid_len]
+            right[start_idx:end_idx] += sfx_right[:valid_len]
+
+    # --- SFX 1: Cinematic Impact & Sub-Drop (t = 0.8s) ---
+    dur1 = 1.6
+    t1 = np.linspace(0, dur1, int(sample_rate * dur1), endpoint=False)
+    # Pitch drop from 135Hz to 38Hz
+    freq_sweep = 135.0 * np.exp(-t1 * 3.2) + 38.0
+    phase = 2.0 * np.pi * np.cumsum(freq_sweep) / sample_rate
+    sub = np.sin(phase) * np.exp(-t1 * 2.0)
+    # Transient punch
+    punch = np.random.uniform(-1.0, 1.0, len(t1)) * np.exp(-t1 * 40.0)
+    # Metallic low resonance
+    resonance = np.sin(2.0 * np.pi * 510.0 * t1) * np.exp(-t1 * 5.0) * 0.25
+    impact = (sub * 0.75 + punch * 0.35 + resonance * 0.15)
+    inject_sfx(0.8, impact * 0.95, impact * 0.95)
+
+    # --- SFX 2: Pop & Crisp Crystal Bell Chime (t = 4.5s) ---
+    dur2 = 1.3
+    t2 = np.linspace(0, dur2, int(sample_rate * dur2), endpoint=False)
+    # Whoosh sweep
+    whoosh_freq = 240.0 + 850.0 * (t2 / 0.25) * (t2 < 0.25)
+    whoosh = np.sin(2.0 * np.pi * np.cumsum(whoosh_freq) / sample_rate) * np.exp(-t2 * 6.0) * (t2 < 0.25) * 0.3
+    # Bell chords (880Hz [A5] + 1320Hz [E6] + 1760Hz)
+    bell = (np.sin(2.0 * np.pi * 880.0 * t2) * 0.5 +
+            np.sin(2.0 * np.pi * 1320.0 * t2) * 0.35 +
+            np.sin(2.0 * np.pi * 1760.0 * t2) * 0.15) * np.exp(-t2 * 3.8)
+    pop = np.sin(2.0 * np.pi * 330.0 * t2) * np.exp(-t2 * 25.0) * 0.35
+    sfx2_l = (bell * 0.55 + pop * 0.3 + whoosh * 0.2) * 0.85
+    sfx2_r = (bell * 0.65 + pop * 0.3 + whoosh * 0.2) * 0.95  # subtle right pan
+    inject_sfx(4.5, sfx2_l, sfx2_r)
+
+    # --- SFX 3: Modern Glass Notification Ping (t = 8.0s) ---
+    dur3 = 1.5
+    t3 = np.linspace(0, dur3, int(sample_rate * dur3), endpoint=False)
+    ping = (np.sin(2.0 * np.pi * 1046.5 * t3) * 0.45 +   # C6
+            np.sin(2.0 * np.pi * 1568.0 * t3) * 0.35 +   # G6
+            np.sin(2.0 * np.pi * 2093.0 * t3) * 0.20) * np.exp(-t3 * 3.2)  # C7
+    glass_tap = np.sin(2.0 * np.pi * 420.0 * t3) * np.exp(-t3 * 30.0) * 0.25
+    sfx3_l = (ping * 0.7 + glass_tap * 0.25) * 0.95
+    sfx3_r = (ping * 0.6 + glass_tap * 0.25) * 0.85
+    inject_sfx(8.0, sfx3_l, sfx3_r)
+
+    # Soft limiter & 16-bit PCM conversion
+    left = np.tanh(left) * 0.88
+    right = np.tanh(right) * 0.88
+    left_int16 = (left * 32767).astype(np.int16)
+    right_int16 = (right * 32767).astype(np.int16)
+
+    # Interleave stereo channels
+    stereo_interleaved = np.empty((left_int16.size + right_int16.size,), dtype=np.int16)
+    stereo_interleaved[0::2] = left_int16
+    stereo_interleaved[1::2] = right_int16
+
+    with wave.open(output_path, "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(stereo_interleaved.tobytes())
+
+    return output_path
+
+
+# ==========================================
+# 2. BACKGROUND & TEXT RENDERING
 # ==========================================
 def create_cinematic_dark_blue_bg(w, h):
     y, x = np.ogrid[:h, :w]
@@ -92,18 +177,19 @@ def render_gold_text_layer():
     layer_w, layer_h = int(t_w + pad_x * 2), int(t_h + pad_y * 2)
     cx, cy = layer_w // 2, layer_h // 2 - 15
 
+    # High-Radiance 24K Gold Gradient
     gold_grad = np.zeros((layer_h, layer_w, 4), dtype=np.uint8)
     for y in range(layer_h):
         t = y / max(1, layer_h - 1)
         if t < 0.25:
             k = t / 0.25
-            r, g, b = int(255*(1-k) + 255*k), int(252*(1-k) + 215*k), int(220*(1-k) + 18*k)
+            r, g, b = int(255*(1-k) + 255*k), int(255*(1-k) + 225*k), int(230*(1-k) + 25*k)
         elif t < 0.65:
             k = (t - 0.25) / 0.40
-            r, g, b = int(255*(1-k) + 215*k), int(215*(1-k) + 145*k), int(18*(1-k) + 6*k)
+            r, g, b = int(255*(1-k) + 225*k), int(225*(1-k) + 155*k), int(25*(1-k) + 8*k)
         else:
             k = (t - 0.65) / 0.35
-            r, g, b = int(215*(1-k) + 110*k), int(145*(1-k) + 65*k), int(6*(1-k) + 2*k)
+            r, g, b = int(225*(1-k) + 130*k), int(155*(1-k) + 85*k), int(8*(1-k) + 2*k)
         gold_grad[y, :, 0] = b
         gold_grad[y, :, 1] = g
         gold_grad[y, :, 2] = r
@@ -141,7 +227,7 @@ def render_gold_text_layer():
 
 
 # ==========================================
-# 2. UI ASSET BUILDERS & COMPOSITING
+# 3. UI ASSET BUILDERS & COMPOSITING
 # ==========================================
 def load_png_asset(path, target_width=None, target_height=None):
     if os.path.exists(path):
@@ -163,7 +249,6 @@ def add_drop_shadow(raw_bgra, blur=35, opacity=0.75):
     if raw_bgra is None: return None
     h, w = raw_bgra.shape[:2]
     pad = 100
-    padded = np.zeros((h + pad, w + pad, 4), dtype=np.uint8)
     shadow = np.zeros((h + pad, w + pad, 4), dtype=np.uint8)
     shadow[pad//2 : pad//2 + h, pad//2 : pad//2 + w, 3] = (raw_bgra[:, :, 3] * opacity).astype(np.uint8)
     shadow = cv2.GaussianBlur(shadow, (blur, blur), 0)
@@ -232,35 +317,12 @@ def overlay_bgra(bg, overlay, x, y):
 
 
 # ==========================================
-# 3. AUDIO SELECTION & DURATION LOGIC
-# ==========================================
-def get_random_audio_and_duration():
-    audio_files = glob.glob(os.path.join(AUDIOS_DIR, "*.wav"))
-    if not audio_files:
-        print("Warning: No .wav files found in Audios/ folder. Defaulting to 10s.")
-        return None, 10.0
-    
-    selected = random.choice(audio_files)
-    try:
-        with wave.open(selected, 'r') as w:
-            frames = w.getnframes()
-            rate = w.getframerate()
-            duration = frames / float(rate)
-        return selected, duration
-    except Exception as e:
-        print(f"Error reading audio {selected}: {e}")
-        return None, 10.0
-
-
-# ==========================================
-# 4. PIPELINE & PHYSICS ENGINE
+# 4. MASTER COMPOSITING PIPELINE
 # ==========================================
 def main():
-    selected_audio, duration_sec = get_random_audio_and_duration()
-    TOTAL_FRAMES = int(FPS * duration_sec)
-    
-    log_step(1, 6, f"Audio selected: {os.path.basename(selected_audio) if selected_audio else 'None'} ({duration_sec:.2f}s)")
-    
+    log_step(1, 6, f"Synthesizing dynamic SFX via wave (Duration: {TOTAL_DURATION}s)...")
+    synthesize_intro_audio(SFX_PATH, total_duration=TOTAL_DURATION)
+
     bg_base = create_cinematic_dark_blue_bg(WIDTH, HEIGHT)
     log_step(2, 6, "Loading channel logo with 3D drop shadows...")
     logo_size = 350
@@ -272,112 +334,118 @@ def main():
 
     logo_base = add_drop_shadow(logo_raw, blur=41, opacity=0.8)
 
-    log_step(3, 6, "Synthesizing maximized ExtraBold gold typography...")
+    log_step(3, 6, "Synthesizing maximized ExtraBold gold typography & particles...")
     gold_text_layer = render_gold_text_layer()
 
-    # Extract 1x1 Disintegration Particles
+    # Pre-extract disintegrating particle cloud from text layer
     alpha = gold_text_layer[:, :, 3]
     y_idx, x_idx = np.where(alpha > 35)
     total_px = len(x_idx)
-    colors = gold_text_layer[y_idx, x_idx, :3]
+
+    # Subsample for rendering performance and glowing circle look
+    sample_count = min(18000, total_px)
+    np.random.seed(42)
+    chosen_indices = np.random.choice(total_px, size=sample_count, replace=False)
 
     title_x = WIDTH // 2 - gold_text_layer.shape[1] // 2
     title_y = 150
     logo_center_y = 620
 
-    p_x = (x_idx + title_x).astype(np.float32)
-    p_y = (y_idx + title_y).astype(np.float32)
+    p_x = (x_idx[chosen_indices] + title_x).astype(np.float32)
+    p_y = (y_idx[chosen_indices] + title_y).astype(np.float32)
 
-    np.random.seed(42)
-    vx = np.random.uniform(-7.0, 7.0, total_px).astype(np.float32)
-    vy = np.random.uniform(-5.5, 2.0, total_px).astype(np.float32)
-    gravity = np.random.uniform(0.95, 1.65, total_px).astype(np.float32)
+    # 24K Molten Gold Palette (BGR)
+    gold_palette = [
+        np.array([25, 215, 255], dtype=np.uint8),  # Radiant Gold
+        np.array([12, 185, 255], dtype=np.uint8),  # Pure Gold
+        np.array([5, 150, 240], dtype=np.uint8),   # Deep Amber Gold
+        np.array([45, 235, 255], dtype=np.uint8),  # Bright Yellow-Gold
+        np.array([195, 245, 255], dtype=np.uint8)  # Specular White-Gold
+    ]
+    p_colors = [gold_palette[i % len(gold_palette)] for i in range(sample_count)]
+    p_sizes = np.random.choice([2, 2, 3, 3, 4], size=sample_count)
 
-    log_step(4, 6, "Compositing UI cards...")
+    vx = np.random.uniform(-16.0, 16.0, sample_count).astype(np.float32)
+    vy = np.random.uniform(-14.0, 3.0, sample_count).astype(np.float32)
+    gravity = np.random.uniform(1.8, 3.2, sample_count).astype(np.float32)
+
+    log_step(4, 6, "Preparing UI elements (Like, Subscribe, WhatsApp)...")
     like_overlay = prepare_like_icon()
     sub_overlay = prepare_subscribe_button()
     wa_overlay = create_whatsapp_banner()
 
-    log_step(5, 6, "Starting FFmpeg Stream (Ultrafast/Memory Optimized)...")
-    
-    # FFmpeg config optimized for low CPU/RAM with integrated audio muxing
+    log_step(5, 6, "Starting FFmpeg encoder pipe...")
     ffmpeg_cmd = [
-        "ffmpeg", "-y", 
+        "ffmpeg", "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo", "-s", f"{WIDTH}x{HEIGHT}",
-        "-pix_fmt", "bgr24", "-r", str(FPS), "-i", "-"
+        "-pix_fmt", "bgr24", "-r", str(FPS), "-i", "-",
+        "-i", SFX_PATH,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+        "-pix_fmt", "yuv420p", "-shortest", OUTPUT_PATH
     ]
-    
-    if selected_audio:
-        ffmpeg_cmd.extend(["-i", selected_audio])
-        
-    ffmpeg_cmd.extend([
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "2",
-    ])
-    
-    if selected_audio:
-        ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "128k", "-shortest"])
-        
-    ffmpeg_cmd.extend(["-pix_fmt", "yuv420p", OUTPUT_PATH])
 
     process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
     start_time = time.time()
 
-    # Ambient Background Particle Environment
+    # Ambient Background Radiant Golden Dust (24K Gold tones)
     np.random.seed(99)
-    env_particles = 1500
+    env_particles = 1600
     sp_x = np.random.uniform(-100, WIDTH + 100, env_particles)
     sp_y = np.random.uniform(-100, HEIGHT + 100, env_particles)
-    sp_vx = np.random.uniform(-1.5, 1.5, env_particles)
-    sp_vy = np.random.uniform(0.5, 3.5, env_particles)
+    sp_vx = np.random.uniform(-1.2, 1.2, env_particles)
+    sp_vy = np.random.uniform(0.6, 3.2, env_particles)
 
-    gold_shades = [(60, 210, 245), (30, 180, 255), (10, 140, 220)]
-    sp_color_idx = np.random.randint(0, 3, env_particles)
+    ambient_gold_shades = [
+        (30, 220, 255),   # Radiant Gold
+        (15, 185, 255),   # Classic Gold
+        (5, 145, 235),    # Warm Amber
+        (180, 240, 255)   # Specular Sparkle
+    ]
+    sp_color_idx = np.random.randint(0, len(ambient_gold_shades), env_particles)
     sp_sizes = np.random.randint(2, 5, env_particles)
 
     # ==================================================
-    # FRAME RENDER LOOP
+    # FRAME RENDER LOOP (Total: 11.5s = 345 frames)
     # ==================================================
     for frame_idx in range(TOTAL_FRAMES):
-        # Calculate real-time vs normalized time for evenly divided stages
-        t_real = frame_idx / FPS
-        # Scale time back to the 0-10 base logic ensuring identical physical movement but perfectly proportional layout
-        t_norm = t_real * (10.0 / duration_sec)
-        
+        t = frame_idx / FPS
         frame = bg_base.copy()
 
-        # Update Background Particles
+        # --- Ambient Golden Dust Update ---
         sp_x += sp_vx
         sp_y += sp_vy
 
-        # Shockwave based on normalized timing
-        if 0.8 <= t_norm <= 2.2:
+        # Shockwave upon text drop (t = 0.8s)
+        if 0.8 <= t <= 1.8:
             dx = sp_x - WIDTH // 2
             dy = sp_y - HEIGHT // 2
             dist = np.sqrt(dx**2 + dy**2) + 0.1
-            shock_mask = dist < 850
+            shock_mask = dist < 900
             if np.any(shock_mask):
-                force = (1.0 - dist[shock_mask] / 850.0) * 35.0
+                force = (1.0 - dist[shock_mask] / 900.0) * 38.0
                 sp_vx[shock_mask] += (dx[shock_mask] / dist[shock_mask]) * force
                 sp_vy[shock_mask] += (dy[shock_mask] / dist[shock_mask]) * force
 
         sp_vx *= 0.88
         sp_vy = sp_vy * 0.88 + 0.12 * 2.0
-
         sp_x = sp_x % WIDTH
         sp_y = sp_y % HEIGHT
 
         draw_x, draw_y = sp_x.astype(np.int32), sp_y.astype(np.int32)
         for i in range(env_particles):
-            cv2.circle(frame, (draw_x[i], draw_y[i]), sp_sizes[i], gold_shades[sp_color_idx[i]], -1)
+            cv2.circle(frame, (draw_x[i], draw_y[i]), sp_sizes[i], ambient_gold_shades[sp_color_idx[i]], -1)
 
         # --------------------------------------------------
-        # STAGE 1: SYNCHRONIZED IMPACT (0% - 25% duration)
+        # STAGE 1: CHANNEL NAME & LOGO (0.0s – 4.5s)
         # --------------------------------------------------
-        if t_norm < 2.5:
+        if t < 3.8:
+            # Drop impact until 0.85s, then pulse
             drop_dur = 0.85
-            if t_norm < drop_dur:
-                prog = t_norm / drop_dur
-                scale = 4.2 - 3.2 * ease_out_back(prog, overshoot=1.5)
+            if t < drop_dur:
+                prog = t / drop_dur
+                scale = 4.2 - 3.2 * ease_out_back(prog, overshoot=1.45)
                 alpha_f = min(1.0, prog * 1.8)
             else:
                 scale = 1.0
@@ -386,16 +454,18 @@ def main():
             tw = max(10, int(gold_text_layer.shape[1] * scale))
             th = max(10, int(gold_text_layer.shape[0] * scale))
             cur_text = cv2.resize(gold_text_layer, (tw, th), interpolation=cv2.INTER_LINEAR)
-            if alpha_f < 1.0: cur_text[:, :, 3] = (cur_text[:, :, 3] * alpha_f).astype(np.uint8)
+            if alpha_f < 1.0:
+                cur_text[:, :, 3] = (cur_text[:, :, 3] * alpha_f).astype(np.uint8)
             overlay_bgra(frame, cur_text, WIDTH//2 - tw//2, int(title_y + gold_text_layer.shape[0]//2 - th//2))
 
             lw = max(10, int(logo_base.shape[1] * scale))
             lh = max(10, int(logo_base.shape[0] * scale))
             cur_logo = cv2.resize(logo_base, (lw, lh), interpolation=cv2.INTER_LINEAR)
-            if alpha_f < 1.0: cur_logo[:, :, 3] = (cur_logo[:, :, 3] * alpha_f).astype(np.uint8)
+            if alpha_f < 1.0:
+                cur_logo[:, :, 3] = (cur_logo[:, :, 3] * alpha_f).astype(np.uint8)
 
-            if t_norm >= drop_dur:
-                pulse = 1.0 + 0.02 * math.sin((t_norm - drop_dur) * 6.0)
+            if t >= drop_dur:
+                pulse = 1.0 + 0.018 * math.sin((t - drop_dur) * 6.0)
                 plw, plh = int(logo_base.shape[1] * pulse), int(logo_base.shape[0] * pulse)
                 cur_logo = cv2.resize(logo_base, (plw, plh), interpolation=cv2.INTER_LINEAR)
                 lx, ly = WIDTH//2 - plw//2, logo_center_y - plh//2
@@ -404,38 +474,43 @@ def main():
 
             overlay_bgra(frame, cur_logo, lx, ly)
 
-            if 0.75 <= t_norm <= 1.4:
-                sw_p = (t_norm - 0.75) / 0.65
-                cv2.circle(frame, (WIDTH//2, logo_center_y - 80), int(150 + sw_p * 850), (40, 195, 235), max(1, int(18 * (1.0 - sw_p))))
+            # Impact shockwave ring
+            if 0.78 <= t <= 1.4:
+                sw_p = (t - 0.78) / 0.62
+                cv2.circle(frame, (WIDTH//2, logo_center_y - 80), int(150 + sw_p * 850), (45, 210, 255), max(1, int(18 * (1.0 - sw_p))))
 
-        # --------------------------------------------------
-        # STAGE 2: MASS DISINTEGRATION (25% - 50% duration)
-        # --------------------------------------------------
-        elif 2.5 <= t_norm < 5.0:
-            dt = t_norm - 2.5
-            l_fade = max(0.0, 1.0 - dt * 2.0)
+        # Rapid Molten Gold Disintegration (3.8s to 4.5s -> exactly clears at 4.5s)
+        elif 3.8 <= t < 4.5:
+            dt = t - 3.8
+            l_fade = max(0.0, 1.0 - dt / 0.45)
             if l_fade > 0:
-                cw, ch = max(2, int(logo_base.shape[1]*l_fade)), max(2, int(logo_base.shape[0]*l_fade))
+                cw, ch = max(2, int(logo_base.shape[1] * l_fade)), max(2, int(logo_base.shape[0] * l_fade))
                 f_logo = cv2.resize(logo_base, (cw, ch), interpolation=cv2.INTER_LINEAR)
                 f_logo[:, :, 3] = (f_logo[:, :, 3] * l_fade).astype(np.uint8)
                 overlay_bgra(frame, f_logo, WIDTH//2 - cw//2, logo_center_y - ch//2)
 
-            cur_px = p_x + vx * (dt * 32.0)
-            cur_py = p_y + vy * (dt * 32.0) + 0.5 * gravity * ((dt * 32.0) ** 2)
+            cur_px = p_x + vx * (dt * 36.0)
+            cur_py = p_y + vy * (dt * 36.0) + 0.5 * gravity * ((dt * 36.0) ** 2)
             valid = (cur_px >= 0) & (cur_px < WIDTH) & (cur_py >= 0) & (cur_py < HEIGHT)
             idx_v = np.where(valid)[0]
-            frame[cur_py[idx_v].astype(np.int32), cur_px[idx_v].astype(np.int32)] = colors[idx_v]
+
+            for i in idx_v:
+                cx_p = int(cur_px[i])
+                cy_p = int(cur_py[i])
+                color = (int(p_colors[i][0]), int(p_colors[i][1]), int(p_colors[i][2]))
+                cv2.circle(frame, (cx_p, cy_p), p_sizes[i], color, -1)
 
         # --------------------------------------------------
-        # STAGE 3: HUGE LIKE & SUBSCRIBE (50% - 75% duration)
+        # STAGE 2: LIKE & SUBSCRIBE (4.5s – 8.0s -> Exactly 3.5s)
         # --------------------------------------------------
-        elif 5.0 <= t_norm < 7.5:
-            if t_norm < 5.6:
-                scale_ui = ease_out_back(min(1.0, (t_norm - 5.0) / 0.6), overshoot=1.3)
-            elif t_norm < 7.0:
-                scale_ui = 1.0 + 0.02 * math.sin((t_norm - 5.6) * 8.0)
+        elif 4.5 <= t < 8.0:
+            t_stage = t - 4.5
+            if t_stage < 0.55:
+                scale_ui = ease_out_back(t_stage / 0.55, overshoot=1.3)
+            elif t_stage < 3.0:
+                scale_ui = 1.0 + 0.02 * math.sin((t_stage - 0.55) * 7.5)
             else:
-                scale_ui = max(0.0, 1.0 - ease_in_cubic((t_norm - 7.0) / 0.5))
+                scale_ui = max(0.0, 1.0 - ease_in_cubic((t_stage - 3.0) / 0.5))
 
             if scale_ui > 0.05:
                 w_like = int(like_overlay.shape[1] * scale_ui)
@@ -445,7 +520,6 @@ def main():
 
                 gap = int(120 * scale_ui)
                 total_w = w_like + gap + w_sub
-
                 start_x = WIDTH // 2 - total_w // 2
                 cy = HEIGHT // 2
 
@@ -456,22 +530,22 @@ def main():
                 overlay_bgra(frame, cv2.resize(sub_overlay, (w_sub, h_sub)), sub_x, sub_y)
 
         # --------------------------------------------------
-        # STAGE 4: STANDALONE WHATSAPP BANNER (75% - 100% duration)
+        # STAGE 3: WHATSAPP BANNER (8.0s – 11.5s -> Exactly 3.5s)
         # --------------------------------------------------
-        elif t_norm >= 7.5:
-            prog = min(1.0, (t_norm - 7.5) / 0.6)
-            scale_wa = ease_out_back(prog, overshoot=1.3)
+        elif t >= 8.0:
+            t_stage = t - 8.0
+            prog = min(1.0, t_stage / 0.55)
+            scale_wa = ease_out_back(prog, overshoot=1.35)
 
-            if t_norm > 8.1:
-                scale_wa *= (1.0 + 0.015 * math.sin((t_norm - 8.1) * 6.0))
+            if t_stage > 0.55:
+                scale_wa *= (1.0 + 0.015 * math.sin((t_stage - 0.55) * 5.5))
 
             ww, wh = int(wa_overlay.shape[1] * scale_wa), int(wa_overlay.shape[0] * scale_wa)
             if ww > 4:
                 overlay_bgra(frame, cv2.resize(wa_overlay, (ww, wh)), WIDTH//2 - ww//2, HEIGHT//2 - wh//2)
 
         process.stdin.write(frame.tobytes())
-        
-        # Memory optimization flush
+
         if frame_idx % 60 == 0:
             gc.collect()
 
@@ -483,6 +557,6 @@ def main():
     process.wait()
     log_step(6, 6, f"Pipeline Complete! Video mapped to {OUTPUT_PATH}")
 
+
 if __name__ == "__main__":
     main()
-
