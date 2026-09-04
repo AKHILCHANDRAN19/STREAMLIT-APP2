@@ -220,20 +220,27 @@ async def execute_full_production(client: Client, message: Message, source: str)
         await asyncio.to_thread(subprocess.run, intro_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await client.send_video(chat_id=message.chat.id, video=optimized_intro, caption="🎬 **Intro Segment**")
 
-        # STEP 4: 7-DAY COMPARISON (Runs in 2s, Extended via Native FFmpeg Filter)
+        # STEP 4: 7-DAY COMPARISON (Full-Duration Dynamic Rendering + Voice/SFX Mix)
         GLOBAL_STATE.set_status("Rendering", f"Rendering 7-Day Chart ({dur_comp:.1f}s)...")
         await status_msg.edit_text("📊 **4/6: Processing 7-Day Comparison Chart...**")
-        raw_comp = await asyncio.to_thread(sevendayComparison.main)
+        
+        # Pass duration_sec=dur_comp so animations run continuously across all seconds
+        raw_comp = await asyncio.to_thread(sevendayComparison.main, duration_sec=dur_comp)
 
         synced_comp = os.path.join(videos_dir, f"comp_synced_{ts}.mp4")
-        pad_dur_1 = max(0.5, dur_comp - 5.5 + 0.5)
         fade_st_1 = max(0.1, dur_comp - 0.6)
 
+        # Mix chart SFX (0:a) and Malayalam Voiceover (1:a) cleanly
         comp_sync_cmd = [
-            "ffmpeg", "-y", "-i", raw_comp, "-i", audio_comp,
+            "ffmpeg", "-y",
+            "-i", raw_comp,
+            "-i", audio_comp,
             "-filter_complex",
-            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop_duration={pad_dur_1},fade=t=out:st={fade_st_1}:d=0.6[v]",
-            "-map", "[v]", "-map", "1:a",
+            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,fade=t=out:st={fade_st_1}:d=0.6[v];"
+            "[0:a]volume=0.8,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,apad[a_sfx];"
+            "[1:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_vox];"
+            "[a_sfx][a_vox]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[aout]",
+            "-map", "[v]", "-map", "[aout]",
             "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
             "-b:v", "1800k", "-maxrate", "2200k", "-bufsize", "4000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
@@ -439,4 +446,3 @@ def start_background_bot():
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_background_bot()
-
