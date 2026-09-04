@@ -4,8 +4,10 @@ import scrapping
 from indic_numtowords import num2words
 
 # ==========================================
-# ⚙️ HELPER FUNCTIONS
+# ⚙️ HELPER FUNCTIONS & TIMEZONE
 # ==========================================
+IST_TIMEZONE = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
 def to_ml_words(num):
     """Converts integers to Malayalam words for precise TTS pronunciation."""
     try:
@@ -103,16 +105,20 @@ def generate_audio_script(source="akgsma"):
     else:
         summary_trend_word = "മാറ്റമില്ലാത്ത അവസ്ഥയാണ്"
 
-    # Time of Day Logic
-    hour = datetime.datetime.now().hour
-    if hour < 12:
-        time_of_day = "രാവിലെ"
-    elif hour < 16:
-        time_of_day = "ഉച്ചയ്ക്ക്"
-    else:
-        time_of_day = "വൈകുന്നേരം"
+    # 4. Accurate Kerala Time-of-Day Logic (Strict IST)
+    now_ist = datetime.datetime.now(IST_TIMEZONE)
+    hour = now_ist.hour
 
-    # 4. Construct Part 1: Seven-Day Comparison
+    if 4 <= hour < 12:
+        time_of_day = "രാവിലെ"        # 04:00 AM - 11:59 AM
+    elif 12 <= hour < 16:
+        time_of_day = "ഉച്ചയ്ക്ക്"      # 12:00 PM - 03:59 PM
+    elif 16 <= hour < 20:
+        time_of_day = "വൈകിട്ട്"        # 04:00 PM - 07:59 PM
+    else:
+        time_of_day = "രാത്രി"          # 08:00 PM - 03:59 AM
+
+    # 5. Construct Part 1: Seven-Day Comparison
     part1_template = (
         "നമസ്കാരം. ഇന്നത്തെ സ്വർണ്ണവില വിവരങ്ങളിലേക്ക് സ്വാഗതം. "
         "ഇന്നലെ സ്വർണ്ണ വിപണി അവസാനമായി ട്രേഡ് ചെയ്തത് ഗ്രാമിന് {yesterday_price} രൂപ എന്ന നിരക്കിലാണ്. "
@@ -133,26 +139,26 @@ def generate_audio_script(source="akgsma"):
         summary_trend_word=summary_trend_word
     )
 
-    # 5. Construct Part 2: Today's Price (1 Gram First, 1 Pavan Second)
+    # 6. Construct Part 2: Today's Price (Spaced 'ബി ഐ എസ്' to prevent regex errors)
     if pavan_change_amount > 0:
         change_status = "വർദ്ധിച്ചു"
         part2_template = (
             "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. "
-            "ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
+            "ഇതോടെ നയൻ വൺ സിക്സ് ബി ഐ എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
             "ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
         )
     elif pavan_change_amount < 0:
         change_status = "കുറഞ്ഞു"
         part2_template = (
             "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവില ഒരു പവന് {pavan_change_amount} രൂപ {change_status}. "
-            "ഇതോടെ നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
+            "ഇതോടെ നയൻ വൺ സിക്സ് ബി ഐ എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
             "ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
         )
     else:
         change_status = ""
         part2_template = (
             "ഇന്ന് {time_of_day} കേരളത്തിൽ സ്വർണ്ണവിലയിൽ മാറ്റമില്ല. "
-            "നയൻ വൺ സിക്സ് ബി.ഐ.എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
+            "നയൻ വൺ സിക്സ് ബി ഐ എസ് ഹോൾമാർക്ക് ചെയ്ത ഇരുപത്തി രണ്ട് കാരറ്റ് സ്വർണ്ണം "
             "ഒരു ഗ്രാമിന് {gram_price} രൂപയും, ഒരു പവന് {pavan_price} രൂപയുമാണ് ഇന്നത്തെ നിരക്ക്."
         )
 
@@ -189,4 +195,3 @@ def get_script_gd():
 if __name__ == "__main__":
     print("\n--- Malayalam Script Output ---")
     print(get_script_akg())
-
