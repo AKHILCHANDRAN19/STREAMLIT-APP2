@@ -56,15 +56,20 @@ def generate_audio_script(source="akgsma"):
     
     if source == "akgsma":
         akg_data = scrapping.scrape_akgsma_22k()
-        today_1g = akg_data.get('today_1g', gr_data.get('today_1g', 0))
+        # Strictly report failure instead of silently falling back to GoodReturns!
+        if "error" in akg_data or not akg_data.get("today_1g"):
+            return f"❌ Error: AKGSMA rate could not be fetched ({akg_data.get('error', 'No price found')})"
+        today_1g = akg_data["today_1g"]
     else:
-        today_1g = gr_data.get('today_1g', 0)
+        if "error" in gr_data or not gr_data.get("today_1g"):
+            return f"❌ Error: GoodReturns rate could not be fetched ({gr_data.get('error', 'No price found')})"
+        today_1g = gr_data["today_1g"]
         
     yesterday_1g = gr_data.get('yest_1g', 0)
     
     history_items = gr_data.get("history", [])
     if not history_items or len(history_items) < 8:
-        return "❌ Error: Could not retrieve enough market history."
+        return "❌ Error: Could not retrieve enough market history for 7-day comparison."
         
     # Strictly exclude today (index 0) and take preceding 7 days (indices 1 to 7)
     past_7_history = history_items[1:8]
@@ -139,7 +144,7 @@ def generate_audio_script(source="akgsma"):
         summary_trend_word=summary_trend_word
     )
 
-    # 6. Construct Part 2: Today's Price (Spaced 'ബി ഐ എസ്' to prevent regex errors)
+    # 6. Construct Part 2: Today's Price (Spaced 'ബി ഐ എസ്' without dots)
     if pavan_change_amount > 0:
         change_status = "വർദ്ധിച്ചു"
         part2_template = (
