@@ -28,6 +28,7 @@ CURRENT_KEY_INDEX = 0
 CACHED_CARTESIA_TOKEN = None
 TOKEN_EXPIRY = 0
 
+
 def get_gemini_api_keys():
     keys = []
     if st and hasattr(st, "secrets"):
@@ -46,6 +47,7 @@ def get_gemini_api_keys():
 
     return keys
 
+
 def get_next_gemini_key(keys):
     global CURRENT_KEY_INDEX
     if not keys:
@@ -54,13 +56,13 @@ def get_next_gemini_key(keys):
     CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(keys)
     return selected_key
 
+
 def get_output_dir():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     audios_dir = os.path.join(base_dir, "Audios")
-    if os.path.exists("/storage/emulated/0/Download"):
-        return "/storage/emulated/0/Download"
     os.makedirs(audios_dir, exist_ok=True)
     return audios_dir
+
 
 def save_gemini_wave(filename, pcm_data, channels=1, orig_rate=24000, target_rate=44100, sample_width=2):
     """Saves Gemini audio and automatically resamples it to 44.1kHz standard."""
@@ -80,11 +82,13 @@ def save_gemini_wave(filename, pcm_data, channels=1, orig_rate=24000, target_rat
         wf.setframerate(rate)
         wf.writeframes(pcm_data)
 
+
 async def generate_audio_gemini(text, api_key, output_filename=None):
     masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "VALID_KEY"
     try:
         client = genai.Client(api_key=api_key)
-        res = client.models.generate_content(
+        # Using native async .aio client to avoid blocking the bot loop
+        res = await client.aio.models.generate_content(
             model="gemini-2.5-flash-preview-tts",
             contents=text,
             config=types.GenerateContentConfig(
@@ -100,33 +104,32 @@ async def generate_audio_gemini(text, api_key, output_filename=None):
         )
         audio_data = res.candidates[0].content.parts[0].inline_data.data
         out_dir = get_output_dir()
-        file_path = output_filename or os.path.join(out_dir, f"vijay_gemini_{int(time.time())}.wav")
+        file_path = output_filename or os.path.join(out_dir, f"gemini_{int(time.time()*1000)}.wav")
         save_gemini_wave(file_path, audio_data, orig_rate=24000, target_rate=44100)
         return file_path
     except Exception as e:
-        print(f"❌ Gemini TTS failed on key [{masked_key}]: {e}", flush=True)
+        print(f"⚠️ Gemini key [{masked_key}] failed / rate-limited: {e}", flush=True)
         return None
 
-def get_cartesia_public_token():
+
+def get_cartesia_public_token(force_refresh=False):
     global CACHED_CARTESIA_TOKEN, TOKEN_EXPIRY
     now = time.time()
-    if CACHED_CARTESIA_TOKEN and now < TOKEN_EXPIRY:
+    
+    if not force_refresh and CACHED_CARTESIA_TOKEN and now < TOKEN_EXPIRY:
         return CACHED_CARTESIA_TOKEN
 
-    # Allow direct API key if present in Streamlit secrets or env
     if st and hasattr(st, "secrets") and "CARTESIA_API_KEY" in st.secrets:
         return st.secrets["CARTESIA_API_KEY"].strip()
     if os.environ.get("CARTESIA_API_KEY"):
         return os.environ.get("CARTESIA_API_KEY").strip()
 
-    # Use curl_cffi with Chrome 120 impersonation to bypass Cloudflare 403 on AWS IPs
     url = "https://backend.cartesia.ai/access-token/public"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Referer": "https://cartesia.ai/languages/malayalam",
         "Origin": "https://cartesia.ai",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
     }
     try:
         res = requests.get(url, headers=headers, impersonate="chrome120", timeout=12)
@@ -135,25 +138,31 @@ def get_cartesia_public_token():
             token = data.get("token", data.get("access_token"))
             if token:
                 CACHED_CARTESIA_TOKEN = token
-                TOKEN_EXPIRY = now + 900  # 15 minutes
+                # Short cache (60s) so dead tokens are never held for 15 minutes!
+                TOKEN_EXPIRY = now + 60
                 return token
-        print(f"⚠️ Cartesia token request returned status {res.status_code}", flush=True)
         return None
     except Exception as e:
-        print(f"❌ Failed to obtain Cartesia token via curl_cffi: {e}", flush=True)
+        print(f"❌ Failed to fetch Cartesia token: {e}", flush=True)
         return None
 
-async def generate_audio_cartesia(text, token, output_filename=None):
+
+async def generate_audio_cartesia(text, output_filename=None):
+    global CACHED_CARTESIA_TOKEN
+    
+    token = get_cartesia_public_token(force_refresh=False)
+    if not token:
+        token = get_cartesia_public_token(force_refresh=True)
+        if not token:
+            return None
+
     ws_url = f"wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10&api_key={token}"
     payload = {
         "context_id": str(uuid.uuid4()),
         "model_id": "sonic-3",
         "transcript": text,
         "language": "ml",
-        "voice": {
-            "mode": "id",
-            "id": VIJAY_VOICE["id"]
-        },
+        "voice": {"mode": "id", "id": VIJAY_VOICE["id"]},
         "output_format": {
             "container": "raw",
             "encoding": "pcm_s16le",
@@ -171,7 +180,7 @@ async def generate_audio_cartesia(text, token, output_filename=None):
                     audio_buffer.extend(base64.b64decode(response["data"]))
                 elif response.get("type") == "done":
                     out_dir = get_output_dir()
-                    file_path = output_filename or os.path.join(out_dir, f"vijay_cartesia_{int(time.time())}.wav")
+                    file_path = output_filename or os.path.join(out_dir, f"cartesia_{int(time.time()*1000)}.wav")
                     with wave.open(file_path, "wb") as wav_file:
                         wav_file.setnchannels(1)
                         wav_file.setsampwidth(2)
@@ -179,34 +188,42 @@ async def generate_audio_cartesia(text, token, output_filename=None):
                         wav_file.writeframes(audio_buffer)
                     return file_path
                 elif response.get("type") == "error":
-                    print(f"❌ Cartesia Error: {response.get('error')}", flush=True)
+                    print(f"⚠️ Cartesia token invalid/exhausted: {response.get('error')}", flush=True)
+                    # Instantly invalidate dead token so next run doesn't reuse it!
+                    CACHED_CARTESIA_TOKEN = None
                     return None
     except Exception as e:
-        print(f"❌ Cartesia WebSocket Error: {e}", flush=True)
+        print(f"⚠️ Cartesia connection dropped: {e}", flush=True)
+        CACHED_CARTESIA_TOKEN = None
         return None
+
 
 async def generate_speech(text, output_filename=None):
     """
-    Synthesizes speech:
-    1. Iterates through ALL available Gemini API keys in rotation.
-    2. Falls back to Cartesia with Cloudflare-bypassed token fetching.
+    1. Tries all Gemini keys in rotation (skipping exhausted ones).
+    2. Falls back to Cartesia (auto-invalidating expired tokens).
     """
     gemini_keys = get_gemini_api_keys()
 
+    # Step 1: Loop through all Gemini keys on 429 rate limit
     if gemini_keys and genai:
-        # Try every single key before abandoning Gemini
         for _ in range(len(gemini_keys)):
-            current_key = get_next_gemini_key(gemini_keys)
-            audio_path = await generate_audio_gemini(text, current_key, output_filename)
+            key = get_next_gemini_key(gemini_keys)
+            audio_path = await generate_audio_gemini(text, key, output_filename)
             if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
                 return audio_path
 
-    # Fallback to Cartesia
-    token = get_cartesia_public_token()
-    if token:
-        audio_path = await generate_audio_cartesia(text, token, output_filename)
+    # Step 2: Fallback to Cartesia with fresh token retry
+    audio_path = await generate_audio_cartesia(text, output_filename)
+    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
+        return audio_path
+
+    # Step 3: If token expired, force a fresh token fetch and retry once
+    token_fresh = get_cartesia_public_token(force_refresh=True)
+    if token_fresh:
+        audio_path = await generate_audio_cartesia(text, output_filename)
         if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
             return audio_path
 
-    print(f"🚨 CRITICAL: All TTS synthesis providers failed for text chunk: '{text[:30]}...'", flush=True)
+    print(f"🚨 Both Gemini and Cartesia failed for: '{text[:35]}...'", flush=True)
     return None
