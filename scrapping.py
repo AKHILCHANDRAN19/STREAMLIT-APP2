@@ -1,4 +1,5 @@
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 from curl_cffi import requests
@@ -7,6 +8,7 @@ from curl_cffi import requests
 # ⚙️ CONFIGURATION & TIMEZONE (IST)
 # ==========================================
 IST_TIMEZONE = timezone(timedelta(hours=5, minutes=30))
+
 GOLD_URL_GOODRETURNS = "https://www.goodreturns.in/gold-rates/kerala.html"
 AKGSMA_URL = "https://akgsma-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp"
 
@@ -38,13 +40,22 @@ def format_inr(amount: float) -> str:
 # ==========================================
 def scrape_goodreturns_22k():
     try:
-        response = requests.get(GOLD_URL_GOODRETURNS, impersonate="chrome110", timeout=15)
-        if response.status_code != 200:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+        }
+        url = f"{GOLD_URL_GOODRETURNS}?_ts={int(time.time())}"
+
+        response = requests.get(url, headers=headers, impersonate="chrome120", timeout=20)
+        if response.status_code != 200 or len(response.text) < 1000:
             return {"error": f"Failed with HTTP {response.status_code}"}
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # --- Today's & Yesterday's 22K Rates ---
         today_22k_1g = 0.0
         yest_22k_1g = 0.0
 
@@ -73,23 +84,26 @@ def scrape_goodreturns_22k():
                         yest_22k_1g = today_22k_1g - change
                         break
 
-        # --- History Table (Last 10 Days to allow math for the past 7 days) ---
         history = []
         for table in soup.find_all("table", class_="table-conatiner"):
-            headers = [th.text.strip().lower() for th in table.find_all("th")]
-            if "date" in headers:
+            headers_list = [th.text.strip().lower() for th in table.find_all("th")]
+            if "date" in headers_list:
                 for row in table.find("tbody").find_all("tr")[:10]:
                     cols = row.find_all("td")
                     if len(cols) >= 3:
                         date_str = cols[0].text.strip().split(",")[0]
                         price_22k = clean_price(cols[2].text)
-                        history.append({
-                            "date": date_str,
-                            "1g": price_22k,
-                            "8g": price_22k * 8
-                        })
+                        if price_22k > 0:
+                            history.append({
+                                "date": date_str,
+                                "1g": price_22k,
+                                "8g": price_22k * 8
+                            })
                 if history:
                     break
+
+        if today_22k_1g == 0.0:
+            return {"error": "Could not parse GoodReturns 22K rate."}
 
         return {
             "today_1g": today_22k_1g,
@@ -106,42 +120,75 @@ def scrape_goodreturns_22k():
 
 
 # ==========================================
-# 🌟 2. AKGSMA SCRAPER (TODAY'S 22K RATE)
+# 🌟 2. AKGSMA SCRAPER (VIA GOOGLE TRANSLATE PROXY)
 # ==========================================
 def scrape_akgsma_22k():
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Referer": "https://translate.google.com/"
         }
-        response = requests.get(AKGSMA_URL, headers=headers, impersonate="chrome120", timeout=15)
 
-        if response.status_code == 200 and "Just a moment..." not in response.text:
-            soup = BeautifulSoup(response.text, "html.parser")
-            p_22k_1g = 0
+        # Follow redirects through the translate.goog proxy
+        response = requests.get(
+            AKGSMA_URL,
+            headers=headers,
+            impersonate="chrome120",
+            allow_redirects=True,
+            timeout=20
+        )
 
-            for li in soup.find_all("li"):
-                text = li.text.strip().upper()
-                if "22K" in text and "₹" in text:
-                    p_22k_1g = int(re.sub(r"[^\d]", "", text.split("₹")[-1]))
+        if response.status_code != 200:
+            return {"error": f"Translate Proxy returned status {response.status_code}"}
+
+        html_content = response.text
+        if "Just a moment..." in html_content or len(html_content) < 500:
+            return {"error": "Blocked by security challenge."}
+
+        soup = BeautifulSoup(html_content, "html.parser")
+        p_22k_1g = 0
+
+        # Strategy 1: Targeted regex on full rendered text
+        # Handles '22K916 (1gm) - ₹ 14240', '22K 916 (1gm) - Rs. 14240', '22K - ₹ 14,240'
+        full_text = soup.get_text(separator=" ")
+        patterns = [
+            r"22K(?:916)?\s*(?:\([^)]*\))?\s*[-:]?\s*(?:₹|Rs\.?|INR)?\s*([0-9,]{4,7})",
+            r"22\s*Carat.*?₹\s*([0-9,]{4,7})",
+            r"22K.*?₹\s*([0-9,]{4,7})"
+        ]
+
+        for pat in patterns:
+            match = re.search(pat, full_text, re.IGNORECASE)
+            if match:
+                val = int(re.sub(r"[^\d]", "", match.group(1)))
+                if 5000 < val < 50000:  # Valid price sanity check
+                    p_22k_1g = val
                     break
 
-            if p_22k_1g == 0:
-                rate_list = soup.find("ul", class_=re.compile("list-block"))
-                if rate_list:
-                    match = re.search(r"22K916.*?₹\s*(\d+)", rate_list.get_text(separator=" | "))
-                    if match:
-                        p_22k_1g = int(match.group(1))
+        # Strategy 2: Search within list elements and divs directly
+        if p_22k_1g == 0:
+            for el in soup.find_all(["li", "p", "div", "span"]):
+                txt = el.text.strip().upper()
+                if "22K" in txt and any(sym in txt for sym in ["₹", "RS", "INR"]):
+                    sub_m = re.search(r"(?:₹|RS\.?|INR)?\s*([0-9,]{4,7})", txt)
+                    if sub_m:
+                        val = int(re.sub(r"[^\d]", "", sub_m.group(1)))
+                        if 5000 < val < 50000:
+                            p_22k_1g = val
+                            break
 
-            if p_22k_1g > 0:
-                return {
-                    "today_1g": float(p_22k_1g),
-                    "today_8g": float(p_22k_1g * 8)
-                }
-            else:
-                return {"error": "Could not locate 22K rate in page structure."}
+        if p_22k_1g > 0:
+            return {
+                "today_1g": float(p_22k_1g),
+                "today_8g": float(p_22k_1g * 8)
+            }
         else:
-            return {"error": f"Failed with status code: {response.status_code}"}
+            return {"error": "Rate pattern not found in translated page structure."}
 
     except Exception as e:
         return {"error": str(e)}
@@ -166,7 +213,7 @@ def get_akgsma_report() -> str:
     ]
 
     if "error" in akg_data:
-        lines.append(f"❌ **Error fetching AKGSMA:** {akg_data['error']}")
+        lines.append(f"❌ **Error fetching AKGSMA:** `{akg_data['error']}`")
     else:
         lines.append(f"🔸 **1 Gram (22K / 916) :** `{format_inr(akg_data['today_1g'])}`")
         lines.append(f"🔸 **1 Pavan (8 Grams)   :** `{format_inr(akg_data['today_8g'])}`")
@@ -190,7 +237,7 @@ def get_goodreturns_report() -> str:
     ]
 
     if "error" in gr_data:
-        lines.append(f"❌ **Error fetching GoodReturns:** {gr_data['error']}")
+        lines.append(f"❌ **Error fetching GoodReturns:** `{gr_data['error']}`")
         return "\n".join(lines)
 
     diff_1g = gr_data['diff_1g']
@@ -231,12 +278,11 @@ def get_goodreturns_report() -> str:
     return "\n".join(lines)
 
 
-# ==========================================
-# 🚀 CLI MAIN EXECUTION
-# ==========================================
 def main():
     print(get_goodreturns_report())
+    print()
+    print(get_akgsma_report())
+
 
 if __name__ == "__main__":
     main()
-
