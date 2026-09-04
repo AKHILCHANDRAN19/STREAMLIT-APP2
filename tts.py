@@ -7,6 +7,7 @@ import uuid
 import wave
 import os
 import time
+import numpy as np
 
 try:
     import streamlit as st
@@ -61,7 +62,18 @@ def get_output_dir():
     os.makedirs(audios_dir, exist_ok=True)
     return audios_dir
 
-def save_gemini_wave(filename, pcm_data, channels=1, rate=24000, sample_width=2):
+def save_gemini_wave(filename, pcm_data, channels=1, orig_rate=24000, target_rate=44100, sample_width=2):
+    """Saves Gemini audio and automatically resamples it to 44.1kHz standard."""
+    if orig_rate != target_rate:
+        samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32)
+        target_len = int(len(samples) * target_rate / float(orig_rate))
+        indices = np.linspace(0, len(samples) - 1, target_len)
+        resampled = np.interp(indices, np.arange(len(samples)), samples).astype(np.int16)
+        pcm_data = resampled.tobytes()
+        rate = target_rate
+    else:
+        rate = orig_rate
+
     with wave.open(filename, "wb") as wf:
         wf.setnchannels(channels)
         wf.setsampwidth(sample_width)
@@ -89,7 +101,7 @@ async def generate_audio_gemini(text, api_key, output_filename=None):
         audio_data = res.candidates[0].content.parts[0].inline_data.data
         out_dir = get_output_dir()
         file_path = output_filename or os.path.join(out_dir, f"vijay_gemini_{int(time.time())}.wav")
-        save_gemini_wave(file_path, audio_data)
+        save_gemini_wave(file_path, audio_data, orig_rate=24000, target_rate=44100)
         return file_path
     except Exception as e:
         print(f"❌ Gemini TTS failed on key [{masked_key}]: {e}")
@@ -98,7 +110,6 @@ async def generate_audio_gemini(text, api_key, output_filename=None):
 def get_cartesia_public_token():
     global CACHED_CARTESIA_TOKEN, TOKEN_EXPIRY
     now = time.time()
-    # Reuse cached token for 15 minutes instead of re-fetching per chunk
     if CACHED_CARTESIA_TOKEN and now < TOKEN_EXPIRY:
         return CACHED_CARTESIA_TOKEN
 
@@ -114,7 +125,7 @@ def get_cartesia_public_token():
         token = data.get("token", data.get("access_token"))
         if token:
             CACHED_CARTESIA_TOKEN = token
-            TOKEN_EXPIRY = now + 900  # Cache for 15 minutes
+            TOKEN_EXPIRY = now + 900
         return token
     except Exception as e:
         print(f"❌ Failed to obtain Cartesia token: {e}")
@@ -163,17 +174,22 @@ async def generate_audio_cartesia(text, token, output_filename=None):
         return None
 
 async def generate_speech(text, output_filename=None):
+    """Synthesizes text, trying all Gemini keys in rotation before falling back to Cartesia."""
     gemini_keys = get_gemini_api_keys()
 
     if gemini_keys and genai:
-        current_key = get_next_gemini_key(gemini_keys)
-        audio_path = await generate_audio_gemini(text, current_key, output_filename)
-        if audio_path:
-            return audio_path
+        # Loop through every key in the rotation pool if one fails
+        for _ in range(len(gemini_keys)):
+            current_key = get_next_gemini_key(gemini_keys)
+            audio_path = await generate_audio_gemini(text, current_key, output_filename)
+            if audio_path and os.path.exists(audio_path):
+                return audio_path
 
+    # Fallback to Cartesia if all Gemini keys fail
     token = get_cartesia_public_token()
     if token:
-        return await generate_audio_cartesia(text, token, output_filename)
+        audio_path = await generate_audio_cartesia(text, token, output_filename)
+        if audio_path and os.path.exists(audio_path):
+            return audio_path
 
     return None
-
