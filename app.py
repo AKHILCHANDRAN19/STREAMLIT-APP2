@@ -11,7 +11,20 @@ import gc
 from datetime import datetime, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.types import Message
+import imageio_ffmpeg
 
+# Bootstrap FFmpeg into /tmp and inject into system PATH
+_ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+_tmp_ffmpeg = "/tmp/ffmpeg"
+if not os.path.exists(_tmp_ffmpeg):
+    try:
+        os.symlink(_ffmpeg_exe, _tmp_ffmpeg)
+    except OSError:
+        shutil.copy2(_ffmpeg_exe, _tmp_ffmpeg)
+    os.chmod(_tmp_ffmpeg, 0o755)
+
+if "/tmp" not in os.environ.get("PATH", "").split(":"):
+    os.environ["PATH"] = f"/tmp:{os.environ.get('PATH', '')}"
 
 # Modular project sub-engines
 import intro
@@ -278,7 +291,7 @@ async def execute_full_production(client: Client, message: Message, source: str)
             "-i", raw_price,
             "-i", audio_price,
             "-filter_complex",
-            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=30,fade=t=out:st={fade_st_2}:d=0.6[v];"
+            f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fade=t=out:st={fade_st_2}:d=0.6[v];"
             "[0:a]volume=0.8,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,apad[a_sfx];"
             "[1:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_vox];"
             "[a_sfx][a_vox]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[aout]",
@@ -503,3 +516,4 @@ def start_background_bot():
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_background_bot()
+
