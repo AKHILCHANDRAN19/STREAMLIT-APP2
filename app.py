@@ -20,8 +20,10 @@ if not os.path.exists(_tmp_ffmpeg):
     try:
         os.symlink(_ffmpeg_exe, _tmp_ffmpeg)
     except OSError:
-        shutil.copy2(_ffmpeg_exe, _tmp_ffmpeg)
-    os.chmod(_tmp_ffmpeg, 0o755)
+        try:
+            shutil.copy2(_ffmpeg_exe, _tmp_ffmpeg)
+        except OSError:
+            pass
 
 if "/tmp" not in os.environ.get("PATH", "").split(":"):
     os.environ["PATH"] = f"/tmp:{os.environ.get('PATH', '')}"
