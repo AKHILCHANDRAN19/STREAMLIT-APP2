@@ -10,4 +10,4 @@ websockets
 requests
 google-genai
 indic-numtowords
-static-ffmpeg
+
