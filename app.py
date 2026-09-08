@@ -11,8 +11,7 @@ import gc
 from datetime import datetime, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.types import Message
-import static_ffmpeg
-static_ffmpeg.add_paths()
+
 
 # Modular project sub-engines
 import intro
